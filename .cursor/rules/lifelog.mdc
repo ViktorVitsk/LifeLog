@@ -1,0 +1,7 @@
+- Never decrypt data on the server side
+- Never log decrypted user content
+- All primary keys are UUID, never integer
+- All datetimes are UTC (TIMESTAMPTZ)
+- Alembic for all migrations, never create_all()
+- Proceed phase by phase, stop after each phase and wait
+- Pydantic schemas and SQLAlchemy models are separate files

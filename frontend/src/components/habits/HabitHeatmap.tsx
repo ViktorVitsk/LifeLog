@@ -25,7 +25,7 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 overflow-x-auto">
       <div className="flex items-baseline justify-between mb-2">
         <h3 className="text-sm font-medium text-zinc-200">Completion heatmap</h3>
-        <span className="text-[11px] text-zinc-500">{weeks} weeks · darker = more logs</span>
+        <span className="text-[11px] text-zinc-500">{weeks} weeks · darker = more completed</span>
       </div>
       <div className="flex gap-3 min-w-max">
         <div className="flex flex-col justify-around text-[10px] text-zinc-500 pr-1 pt-5">
@@ -41,8 +41,8 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
                   key={di}
                   title={
                     cell.inFuture
-                      ? `${cell.day} (future)`
-                      : `${cell.day}: ${cell.count} completed`
+                      ? `${cell.day} — future`
+                      : `${cell.day}: ${cell.totalLogs} log(s) · ${cell.count} completed`
                   }
                   className={`w-3 h-3 rounded-sm ${intensityClass(cell)}`}
                 />
@@ -68,7 +68,10 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
 
 interface Cell {
   day: string;
+  /** Completed logs (checkbox on) — drives GitHub-style green intensity. */
   count: number;
+  /** Any HABIT_LOG for this habit that day (for tooltips / debugging). */
+  totalLogs: number;
   inFuture?: boolean;
 }
 
@@ -79,9 +82,9 @@ function sameUuid(a: unknown, b: string): boolean {
   return na.length > 0 && na === nb;
 }
 
-/** Treat JSON / driver quirks: strict true or numeric 1. */
+/** Treat JSON / driver quirks: true, 1, or string "true". */
 function isHabitDone(v: unknown): boolean {
-  return v === true || v === 1;
+  return v === true || v === 1 || v === "true" || v === "1";
 }
 
 function intensityClass(cell: Cell) {
@@ -95,32 +98,42 @@ function intensityClass(cell: Cell) {
 function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  /** Calendar day in local TZ — never compare raw timestamps to "today midnight"
+   *  or you drop every log made after 00:00 on the current calendar day. */
+  const todayKey = dayKey(today);
 
-  const completedByDay = new Map<string, number>();
+  const byDay = new Map<string, { done: number; total: number }>();
   for (const e of entries) {
-    if (e.entry_type !== "HABIT_LOG") continue;
+    if (String(e.entry_type) !== "HABIT_LOG") continue;
     if (!sameUuid(e.habit_id, habitId)) continue;
-    if (!isHabitDone(e.habit_completed)) continue;
     const ts = new Date(e.timestamp);
-    if (ts > today) continue;
     const k = dayKey(ts);
-    completedByDay.set(k, (completedByDay.get(k) ?? 0) + 1);
+    if (k > todayKey) continue;
+    const cur = byDay.get(k) ?? { done: 0, total: 0 };
+    cur.total += 1;
+    if (isHabitDone(e.habit_completed)) cur.done += 1;
+    byDay.set(k, cur);
   }
 
   const totalDays = weeks * 7;
-  const approxStart = new Date(today);
-  approxStart.setDate(approxStart.getDate() - (totalDays - 1));
-  const startMonday = startOfWeekMonday(approxStart);
+  // Anchor the grid to the CURRENT week (Mon..Sun), GitHub-style:
+  // - include today in the visible range
+  // - allow future cells of this week (muted)
+  const endSunday = endOfWeekSunday(today);
+  const startMonday = new Date(endSunday);
+  startMonday.setDate(startMonday.getDate() - (totalDays - 1));
 
   const flat: Cell[] = [];
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(startMonday);
     d.setDate(startMonday.getDate() + i);
     const k = dayKey(d);
-    const inFuture = d > today;
+    const inFuture = k > todayKey;
+    const agg = byDay.get(k);
     flat.push({
       day: k,
-      count: inFuture ? 0 : (completedByDay.get(k) ?? 0),
+      count: inFuture ? 0 : (agg?.done ?? 0),
+      totalLogs: inFuture ? 0 : (agg?.total ?? 0),
       inFuture,
     });
   }
@@ -131,7 +144,7 @@ function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
   for (let w = 0; w < weeks; w++) {
     const col: Cell[] = [];
     for (let dow = 0; dow < 7; dow++) {
-      col.push(flat[w * 7 + dow] ?? { day: "", count: 0 });
+      col.push(flat[w * 7 + dow] ?? { day: "", count: 0, totalLogs: 0 });
     }
     cells.push(col);
     const firstOfWeek = flat[w * 7];
@@ -149,6 +162,14 @@ function startOfWeekMonday(d: Date): Date {
   x.setDate(x.getDate() + diff);
   x.setHours(0, 0, 0, 0);
   return x;
+}
+
+function endOfWeekSunday(d: Date): Date {
+  const mon = startOfWeekMonday(d);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  sun.setHours(0, 0, 0, 0);
+  return sun;
 }
 
 function monthTick(dayIso: string, prevWeekFirstIso: string | null | undefined) {

@@ -72,6 +72,9 @@ class Entry(Base):
     mood_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     energy_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     anxiety_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    focus_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    social_battery_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    stress_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     sleep_quality: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)

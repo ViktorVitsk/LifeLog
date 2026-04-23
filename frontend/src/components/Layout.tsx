@@ -56,6 +56,12 @@ function LayoutInner() {
             <NavLink to="/psychology" className={linkCls}>
               Psychology
             </NavLink>
+            <NavLink to="/skills" className={linkCls}>
+              Skills
+            </NavLink>
+            <NavLink to="/habits" className={linkCls}>
+              Habits
+            </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-zinc-400">
             <SyncBadge pending={pendingCount} result={sync.lastResult} online={online} />

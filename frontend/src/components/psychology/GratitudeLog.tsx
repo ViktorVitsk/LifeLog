@@ -8,6 +8,13 @@ interface GratitudePayload {
   items?: string[];
 }
 
+function extractItems(raw: GratitudePayload | undefined): string[] {
+  if (!raw || typeof raw !== "object") return [];
+  const items = (raw as { items?: unknown }).items;
+  if (!Array.isArray(items)) return [];
+  return items.filter((x): x is string => typeof x === "string" && x.length > 0);
+}
+
 /**
  * Gratitude log — decrypts each recent gratitude entry eagerly so the user
  * can scan them as a list of items. Capped so we never decrypt hundreds of
@@ -27,7 +34,7 @@ export default function GratitudeLog({
     [entries, limit],
   );
 
-  const { data, pending } = useDecryptedEntries<GratitudePayload>(items, kek);
+  const { data, errors, pending } = useDecryptedEntries<GratitudePayload>(items, kek);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
@@ -52,14 +59,18 @@ export default function GratitudeLog({
         <ul className="space-y-3">
           {items.map((e) => {
             const p = data[e.id];
+            const err = errors[e.id];
+            const lines = extractItems(p);
             return (
               <li key={e.id}>
                 <div className="text-[11px] text-zinc-500 tabular-nums">
                   {formatTs(e.timestamp)}
                 </div>
-                {p?.items && p.items.length > 0 ? (
+                {err ? (
+                  <div className="text-xs text-rose-300 mt-1">Decrypt failed: {err}</div>
+                ) : lines.length > 0 ? (
                   <ul className="mt-1 space-y-0.5">
-                    {p.items.map((it, i) => (
+                    {lines.map((it, i) => (
                       <li key={i} className="text-sm text-zinc-200">
                         <span className="text-zinc-500 mr-2">·</span>
                         {it}
@@ -67,7 +78,9 @@ export default function GratitudeLog({
                     ))}
                   </ul>
                 ) : (
-                  <div className="text-xs text-zinc-500">(empty)</div>
+                  <div className="text-xs text-zinc-500 mt-1">
+                    {pending ? "…" : "(empty — wrong password or corrupt entry)"}
+                  </div>
                 )}
               </li>
             );

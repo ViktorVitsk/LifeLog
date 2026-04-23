@@ -36,7 +36,7 @@ export function useEntries() {
   const serverQuery = useQuery<EntryRead[]>({
     queryKey: ["entries", token ? "auth" : "anon"],
     enabled: Boolean(token),
-    queryFn: () => api.listEntries(token!),
+    queryFn: () => api.listEntries(token!, { limit: 1000 }),
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });

@@ -46,6 +46,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 - **Check-in**: new **Skill** and **Habit** tabs → `SkillSessionForm` / `HabitLogForm`. `HABIT_LOG` encrypts optional `notes`; open: `habit_id`, `habit_completed`, `habit_value`.
 - **Dexie** schema bumped to **v2** — adds compound indexes `skill_id` / `habit_id` on the offline queue for faster filtered reads.
 - **`useEntries`**: server fetch uses `limit=1000` so skill/habit charts have enough history without a second round-trip.
+- **Alembic `0002`**: adds nullable `focus_score`, `social_battery_score`, `stress_score` on `entries` so daily check-in sliders can appear in the dashboard feed as **open** metrics (run `alembic upgrade head` after pull).
 
 ---
 

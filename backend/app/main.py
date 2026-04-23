@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.entries import router as entries_router
+from app.api.habits import router as habits_router
+from app.api.skills import router as skills_router
 from app.core.config import get_settings
 
 logging.basicConfig(
@@ -31,6 +33,8 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(entries_router)
+app.include_router(skills_router)
+app.include_router(habits_router)
 
 
 @app.get("/health", tags=["meta"])

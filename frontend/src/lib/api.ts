@@ -37,6 +37,9 @@ export interface EntrySyncPayload {
   mood_score?: number | null;
   energy_score?: number | null;
   anxiety_score?: number | null;
+  focus_score?: number | null;
+  social_battery_score?: number | null;
+  stress_score?: number | null;
   sleep_hours?: number | null;
   sleep_quality?: number | null;
   session_duration_min?: number | null;
@@ -53,6 +56,31 @@ export interface EntrySyncPayload {
 export interface EntryRead extends EntrySyncPayload {
   created_at: string;
   synced_from_offline: boolean;
+}
+
+export type HabitFrequency = "daily" | "weekly";
+
+export interface Skill {
+  id: string;
+  user_id: string;
+  name: string;
+  color: string | null;
+  icon: string | null;
+  metric_schema: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Habit {
+  id: string;
+  user_id: string;
+  name: string;
+  frequency: HabitFrequency;
+  target_value: number | null;
+  unit: string | null;
+  color: string | null;
+  is_active: boolean;
+  created_at: string;
 }
 
 async function request<T>(
@@ -117,7 +145,101 @@ export const api = {
     });
   },
 
-  async listEntries(token: string): Promise<EntryRead[]> {
-    return request("/api/entries", { token });
+  async listEntries(
+    token: string,
+    params?: {
+      skill_id?: string;
+      habit_id?: string;
+      entry_type?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<EntryRead[]> {
+    const q = new URLSearchParams();
+    if (params?.skill_id) q.set("skill_id", params.skill_id);
+    if (params?.habit_id) q.set("habit_id", params.habit_id);
+    if (params?.entry_type) q.set("entry_type", params.entry_type);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request(`/api/entries${qs ? `?${qs}` : ""}`, { token });
+  },
+
+  async listSkills(token: string): Promise<Skill[]> {
+    return request("/api/skills", { token });
+  },
+
+  async createSkill(
+    token: string,
+    body: {
+      name: string;
+      color?: string | null;
+      icon?: string | null;
+      metric_schema?: Record<string, unknown>;
+    },
+  ): Promise<Skill> {
+    return request("/api/skills", {
+      method: "POST",
+      token,
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateSkill(
+    token: string,
+    id: string,
+    body: Partial<{
+      name: string;
+      color: string | null;
+      icon: string | null;
+      metric_schema: Record<string, unknown>;
+      is_active: boolean;
+    }>,
+  ): Promise<Skill> {
+    return request(`/api/skills/${id}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(body),
+    });
+  },
+
+  async listHabits(token: string): Promise<Habit[]> {
+    return request("/api/habits", { token });
+  },
+
+  async createHabit(
+    token: string,
+    body: {
+      name: string;
+      frequency?: HabitFrequency;
+      target_value?: number | null;
+      unit?: string | null;
+      color?: string | null;
+    },
+  ): Promise<Habit> {
+    return request("/api/habits", {
+      method: "POST",
+      token,
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateHabit(
+    token: string,
+    id: string,
+    body: Partial<{
+      name: string;
+      frequency: HabitFrequency;
+      target_value: number | null;
+      unit: string | null;
+      color: string | null;
+      is_active: boolean;
+    }>,
+  ): Promise<Habit> {
+    return request(`/api/habits/${id}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(body),
+    });
   },
 };

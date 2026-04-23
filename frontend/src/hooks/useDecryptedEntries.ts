@@ -14,19 +14,12 @@ export interface DecryptedMap<T> {
 /**
  * Decrypts a batch of entries client-side into a stable { id → payload } map.
  *
- * Scope of Phase 3:
- *   - Used by the Psychology page for eager decryption of Gratitude entries
- *     (short lists) and for lazy per-entry decryption from the Emotional
- *     History list.
- *   - Results are cached by id for the lifetime of this hook's mount — we
- *     only decrypt ids we haven't seen yet, so scrolling / re-renders are
- *     free after the first pass.
- *
- * Invariants:
- *   - If `kek` is null we return an empty map and never call the crypto
- *     layer (the UI should render an "unlock required" state instead).
- *   - We silently drop rows whose ciphertext fails to decrypt; the caller
- *     can check `errors` if it wants to surface that.
+ * Correctness notes (bugs we fixed):
+ *   - **Never** mark an id as "seen" before decrypt succeeds. Eager `seen`
+ *     + React Strict Mode cancelling the first in-flight batch left ids stuck
+ *     unseen forever → UI showed "(empty)" for Gratitude and similar.
+ *   - When the KEK changes (login / unlock), clear the cache so everything
+ *     re-decrypts with the new key.
  */
 export function useDecryptedEntries<T = Record<string, unknown>>(
   entries: AnyEntry[],
@@ -38,11 +31,23 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
   const [pending, setPending] = useState(false);
   const seenRef = useRef<Set<string>>(new Set());
 
+  // New KEK → drop all cached plaintext and retry decrypts for this mount.
+  useEffect(() => {
+    seenRef.current.clear();
+    setData({});
+    setErrors({});
+  }, [kek]);
+
+  const entrySig = entries
+    .map((e) => `${e.id}:${(e.encrypted_content ?? "").length}:${(e.encrypted_dek ?? "").length}`)
+    .join("|");
+
   useEffect(() => {
     if (!enabled || !kek) {
       setPending(false);
       return;
     }
+
     const todo = entries.filter((e) => e.encrypted_content && !seenRef.current.has(e.id));
     if (todo.length === 0) {
       setPending(false);
@@ -52,19 +57,19 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
     let cancelled = false;
     setPending(true);
 
-    (async () => {
+    void (async () => {
       const newData: Record<string, T> = {};
       const newErrors: Record<string, string> = {};
-      // Mark ids as seen eagerly to avoid re-decrypting on rapid re-renders
-      // even if this batch errors — errors are surfaced through `errors`.
-      for (const e of todo) seenRef.current.add(e.id);
 
       await Promise.all(
         todo.map(async (e) => {
           try {
             const json = await decryptEntry(e.encrypted_content, e.encrypted_dek, kek);
+            if (cancelled) return;
             newData[e.id] = JSON.parse(json) as T;
+            seenRef.current.add(e.id);
           } catch (err) {
+            if (cancelled) return;
             newErrors[e.id] = (err as Error).message;
           }
         }),
@@ -81,10 +86,7 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
     return () => {
       cancelled = true;
     };
-    // We intentionally depend on a stable signature of ids; entries array
-    // identity changes on every re-render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, kek, entries.map((e) => e.id).join(",")]);
+  }, [enabled, kek, entrySig]);
 
   return { data, errors, pending };
 }

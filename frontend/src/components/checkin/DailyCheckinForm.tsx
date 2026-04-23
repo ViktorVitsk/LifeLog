@@ -29,14 +29,14 @@ export default function DailyCheckinForm({ onSubmitted }: { onSubmitted: () => v
         plaintext: {
           time_of_day: timeOfDay,
           notes,
-          focus_score: focus,
-          social_battery: socialBattery,
-          stress_score: stress,
         },
         openFields: {
           mood_score: mood,
           energy_score: energy,
           anxiety_score: anxiety,
+          focus_score: focus,
+          social_battery_score: socialBattery,
+          stress_score: stress,
           tags: [timeOfDay],
         },
       });

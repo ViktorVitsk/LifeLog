@@ -47,6 +47,9 @@ async def sync_entries(
             "mood_score": e.mood_score,
             "energy_score": e.energy_score,
             "anxiety_score": e.anxiety_score,
+            "focus_score": e.focus_score,
+            "social_battery_score": e.social_battery_score,
+            "stress_score": e.stress_score,
             "sleep_hours": e.sleep_hours,
             "sleep_quality": e.sleep_quality,
             "session_duration_min": e.session_duration_min,
@@ -92,6 +95,7 @@ async def list_entries(
     end_date: datetime | None = Query(default=None),
     entry_type: EntryType | None = Query(default=None),
     skill_id: UUID | None = Query(default=None),
+    habit_id: UUID | None = Query(default=None),
     tag: str | None = Query(default=None, description="Filter by single tag (JSONB contains)"),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
@@ -107,6 +111,8 @@ async def list_entries(
         stmt = stmt.where(Entry.entry_type == entry_type.value)
     if skill_id is not None:
         stmt = stmt.where(Entry.skill_id == skill_id)
+    if habit_id is not None:
+        stmt = stmt.where(Entry.habit_id == habit_id)
     if tag is not None:
         stmt = stmt.where(Entry.tags.contains([tag]))
     stmt = stmt.order_by(Entry.timestamp.desc()).limit(limit).offset(offset)

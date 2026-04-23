@@ -36,9 +36,11 @@ export class LifeLogDB extends Dexie {
   constructor() {
     super("lifelog");
     this.version(1).stores({
-      // `id` is the client-generated UUID (also the server PK → idempotent sync).
-      // We index status / timestamp / queued_at for fast dashboard + sync queries.
       entries: "id, status, entry_type, timestamp, queued_at",
+    });
+    this.version(2).stores({
+      entries:
+        "id, status, entry_type, timestamp, queued_at, skill_id, habit_id",
     });
   }
 }

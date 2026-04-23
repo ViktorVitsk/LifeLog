@@ -27,31 +27,46 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
         <h3 className="text-sm font-medium text-zinc-200">Completion heatmap</h3>
         <span className="text-[11px] text-zinc-500">{weeks} weeks · darker = more completed</span>
       </div>
-      <div className="flex gap-3 min-w-max">
-        <div className="flex flex-col justify-around text-[10px] text-zinc-500 pr-1 pt-5">
-          <span>Mon</span>
-          <span>Wed</span>
-          <span>Fri</span>
-        </div>
-        <div className="flex gap-[3px]">
-          {cells.map((col, wi) => (
-            <div key={wi} className="flex flex-col gap-[3px]">
-              {col.map((cell, di) => (
-                <div
-                  key={di}
-                  title={
-                    cell.inFuture
-                      ? `${cell.day} — future`
-                      : `${cell.day}: ${cell.totalLogs} log(s) · ${cell.count} completed`
-                  }
-                  className={`w-3 h-3 rounded-sm ${intensityClass(cell)}`}
-                />
-              ))}
-              <div className="h-4 text-[9px] text-zinc-600 text-center truncate max-w-[14px]">
-                {monthLabels[wi] ?? ""}
+      <div className="min-w-max">
+        <div className="flex gap-2 mb-1">
+          <div className="w-7" />
+          <div className="flex gap-[3px] h-4 items-end">
+            {monthLabels.map((m, i) => (
+              <div
+                key={i}
+                className="w-3 text-[9px] leading-none text-zinc-500 text-center"
+                title={m || ""}
+              >
+                {m}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <div className="flex flex-col gap-[3px] text-[10px] text-zinc-500 w-7">
+            {WEEKDAY_LABELS.map((w) => (
+              <div key={w} className="h-3 leading-3">
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-[3px]">
+            {cells.map((col, wi) => (
+              <div key={wi} className="flex flex-col gap-[3px]">
+                {col.map((cell, di) => (
+                  <div
+                    key={di}
+                    title={
+                      cell.inFuture
+                        ? `${cell.label} — future`
+                        : `${cell.label}: ${cell.totalLogs} log(s) · ${cell.count} completed`
+                    }
+                    className={`w-3 h-3 rounded-sm ${intensityClass(cell)}`}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2 text-[10px] text-zinc-500">
@@ -68,12 +83,15 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
 
 interface Cell {
   day: string;
+  label: string;
   /** Completed logs (checkbox on) — drives GitHub-style green intensity. */
   count: number;
   /** Any HABIT_LOG for this habit that day (for tooltips / debugging). */
   totalLogs: number;
   inFuture?: boolean;
 }
+
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 function sameUuid(a: unknown, b: string): boolean {
   if (a == null || !b) return false;
@@ -132,6 +150,7 @@ function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
     const agg = byDay.get(k);
     flat.push({
       day: k,
+      label: formatDayLabel(k),
       count: inFuture ? 0 : (agg?.done ?? 0),
       totalLogs: inFuture ? 0 : (agg?.total ?? 0),
       inFuture,
@@ -144,7 +163,7 @@ function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
   for (let w = 0; w < weeks; w++) {
     const col: Cell[] = [];
     for (let dow = 0; dow < 7; dow++) {
-      col.push(flat[w * 7 + dow] ?? { day: "", count: 0, totalLogs: 0 });
+      col.push(flat[w * 7 + dow] ?? { day: "", label: "", count: 0, totalLogs: 0 });
     }
     cells.push(col);
     const firstOfWeek = flat[w * 7];
@@ -186,4 +205,13 @@ function dayKey(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function formatDayLabel(dayIso: string) {
+  const [y, m, d] = dayIso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
 }

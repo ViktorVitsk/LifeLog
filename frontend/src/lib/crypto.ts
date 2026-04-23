@@ -1,0 +1,178 @@
+/**
+ * LifeLog client-side crypto module.
+ *
+ * Security model:
+ *   KEK = PBKDF2(master_password, user_salt, 100_000 iter, SHA-256)  — held in memory only.
+ *   DEK = crypto.getRandomValues(32 bytes) per entry                  — never stored plaintext.
+ *   encrypted_content = AES-256-GCM(plaintext_json, DEK)
+ *   encrypted_dek     = AES-256-GCM(DEK_raw_bytes, KEK)
+ *
+ * The server receives only { encrypted_content, encrypted_dek } + open numeric metadata.
+ * It can never read diary content.
+ */
+
+const PBKDF2_ITERATIONS = 100_000;
+const AES_GCM_IV_BYTES = 12;
+const AES_GCM_TAG_BITS = 128;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Low-level helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) throw new Error("Invalid hex string length");
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Key derivation and generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Derive the Key Encryption Key (KEK) from the master password + user salt.
+ * Run ONCE on login. Keep result only in React state (memory).
+ */
+export async function deriveKEK(password: string, saltHex: string): Promise<CryptoKey> {
+  const passwordKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"],
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: hexToBytes(saltHex),
+      iterations: PBKDF2_ITERATIONS,
+      hash: "SHA-256",
+    },
+    passwordKey,
+    { name: "AES-GCM", length: 256 },
+    false, // non-extractable: can't be read back out of memory
+    ["wrapKey", "unwrapKey", "encrypt", "decrypt"],
+  );
+}
+
+/**
+ * Generate a random Data Encryption Key (DEK) for a new entry.
+ * Marked extractable so we can wrap its raw bytes with the KEK.
+ */
+export async function generateDEK(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encryption / decryption
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Encrypt an entry's plaintext JSON for storage on the server.
+ *
+ * Output layout for each ciphertext field (base64):
+ *   [IV (12 bytes) | ciphertext + AES-GCM tag (16 bytes)]
+ */
+export async function encryptEntry(
+  plaintextJson: string,
+  kek: CryptoKey,
+): Promise<{ encryptedContent: string; encryptedDek: string }> {
+  // 1. Generate a fresh DEK for this entry.
+  const dek = await generateDEK();
+  const dekRaw = new Uint8Array(await crypto.subtle.exportKey("raw", dek));
+
+  // 2. Encrypt the plaintext with the DEK.
+  const contentIv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
+  const contentCipher = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: contentIv, tagLength: AES_GCM_TAG_BITS },
+      dek,
+      new TextEncoder().encode(plaintextJson),
+    ),
+  );
+
+  // 3. Wrap the DEK's raw bytes with the KEK.
+  const dekIv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
+  const dekCipher = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: dekIv, tagLength: AES_GCM_TAG_BITS },
+      kek,
+      dekRaw,
+    ),
+  );
+
+  return {
+    encryptedContent: bytesToBase64(concatBytes(contentIv, contentCipher)),
+    encryptedDek: bytesToBase64(concatBytes(dekIv, dekCipher)),
+  };
+}
+
+/**
+ * Decrypt an entry previously returned by the server.
+ */
+export async function decryptEntry(
+  encryptedContent: string,
+  encryptedDek: string,
+  kek: CryptoKey,
+): Promise<string> {
+  // 1. Unwrap the DEK using the KEK.
+  const dekBlob = base64ToBytes(encryptedDek);
+  const dekIv = dekBlob.slice(0, AES_GCM_IV_BYTES);
+  const dekCipher = dekBlob.slice(AES_GCM_IV_BYTES);
+  const dekRaw = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: dekIv, tagLength: AES_GCM_TAG_BITS },
+      kek,
+      dekCipher,
+    ),
+  );
+  const dek = await crypto.subtle.importKey(
+    "raw",
+    dekRaw,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+
+  // 2. Decrypt the content with the DEK.
+  const contentBlob = base64ToBytes(encryptedContent);
+  const contentIv = contentBlob.slice(0, AES_GCM_IV_BYTES);
+  const contentCipher = contentBlob.slice(AES_GCM_IV_BYTES);
+  const plaintextBytes = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: contentIv, tagLength: AES_GCM_TAG_BITS },
+      dek,
+      contentCipher,
+    ),
+  );
+
+  return new TextDecoder().decode(plaintextBytes);
+}

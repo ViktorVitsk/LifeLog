@@ -56,7 +56,10 @@ services:
       - /app/node_modules
     depends_on:
       - backend
-    command: npm run dev -- --host 0.0.0.0
+    # Bind-mounting ./frontend can shadow /app/node_modules on Docker Desktop
+    # (especially on Windows), so run `npm install` at startup before vite.
+    # It's a cheap no-op once deps are present in the anon volume.
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
 
 volumes:
   lifelog_pgdata:

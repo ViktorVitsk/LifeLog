@@ -1,5 +1,21 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
+/**
+ * Thrown when fetch itself fails (offline, DNS failure, CORS preflight
+ * rejection, server unreachable). Callers should treat this as "try again
+ * later" and keep showing cached data instead of crashing the UI.
+ */
+export class NetworkError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "NetworkError";
+  }
+}
+
+export function isNetworkError(e: unknown): e is NetworkError {
+  return e instanceof NetworkError;
+}
+
 export interface RegisterResponse {
   salt: string;
 }
@@ -44,17 +60,32 @@ async function request<T>(
   options: RequestInit & { token?: string } = {},
 ): Promise<T> {
   const { token, headers, ...rest } = options;
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...rest,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-  });
+
+  // Fail fast while offline — don't even attempt the fetch. This keeps
+  // DevTools clean and lets the UI route the error through NetworkError.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    throw new NetworkError("offline");
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...rest,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+    });
+  } catch (e) {
+    // `TypeError: Failed to fetch` / ERR_INTERNET_DISCONNECTED / CORS etc.
+    // All genuinely-network failures surface here.
+    throw new NetworkError("server unreachable", e);
+  }
+
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

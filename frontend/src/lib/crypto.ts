@@ -138,6 +138,33 @@ export async function encryptEntry(
 /**
  * Decrypt an entry previously returned by the server.
  */
+/**
+ * Lightweight password verification: tries to unwrap the DEK from one of
+ * the user's existing entries with the given KEK. Returns true on success.
+ *
+ * Used by the "re-enter master password after refresh" flow so we can tell
+ * the user immediately if they typed the wrong password instead of silently
+ * storing a bad KEK that would later fail on first decrypt attempt.
+ */
+export async function tryUnwrapDek(
+  encryptedDek: string,
+  kek: CryptoKey,
+): Promise<boolean> {
+  try {
+    const blob = base64ToBytes(encryptedDek);
+    const iv = blob.slice(0, AES_GCM_IV_BYTES);
+    const cipher = blob.slice(AES_GCM_IV_BYTES);
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, tagLength: AES_GCM_TAG_BITS },
+      kek,
+      cipher,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function decryptEntry(
   encryptedContent: string,
   encryptedDek: string,

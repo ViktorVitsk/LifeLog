@@ -6,19 +6,25 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 
 ---
 
-## Phase 1 scope
+## Phase status
 
-What Phase 1 delivers:
+| Phase | Status | What it delivers |
+|---|---|---|
+| 1 — Core foundation | ✅ done | Docker stack, DB schema, JWT auth, encrypted entries sync, Web Crypto module |
+| 2 — Daily check-in | ✅ done | `/checkin` with dynamic forms, Dexie offline queue, SyncManager, `/dashboard` with mood trend |
+| 3 — Psychology | — | EMOTIONAL_STATE (gap model), gratitude chart, `/psychology` |
+| 4 — Skills & habits | — | Skill builder, SKILL_SESSION form, habit heatmap |
+| 5 — Analytics & polish | — | `/api/analytics/*`, correlations, body metrics, sleep, JSON export |
 
-- Docker Compose (Postgres 16 + FastAPI + Vite+React frontend)
-- All DB tables via a single Alembic migration (`0001_initial_schema.py`)
-- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh`
-- `POST /api/entries/sync`, `GET /api/entries`, `GET /api/entries/{id}`
-- Frontend `lib/crypto.ts` with `deriveKEK`, `generateDEK`, `encryptEntry`, `decryptEntry`
-- A minimal smoke-test UI that encrypts a note, syncs it, fetches it back, and decrypts it
+### Phase 2 details
 
-What is **not** in Phase 1 (comes later):
-Dexie offline queue, `/checkin` form, dashboards, analytics, skill builder, habits UI.
+- **Routing**: `react-router-dom` with protected routes. `/login` → `/checkin` (primary) and `/dashboard`.
+- **Auth**: `AuthContext` mirrors `{ token, username, salt }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password so the KEK can be re-derived locally (no network round-trip). Wrong-password attempts are caught by unwrapping an existing entry's DEK.
+- **Offline queue**: Dexie IndexedDB table `entries` with `status: pending | synced | error`. Every submission is encrypted client-side, enqueued optimistically, and displayed instantly on the dashboard.
+- **SyncManager** (single global instance via `SyncContext`): pushes pending rows every 30 s, on `online`, on `visibilitychange`, and on explicit `trigger()` after a form submit. Idempotent on the server (`ON CONFLICT DO NOTHING`). Network failures are caught as `NetworkError`, marked silently as "offline", and retried on the next tick; only genuine 4xx/5xx rejections flip a row into the `error` state.
+- **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit / sleep / meal forms come in later phases.
+- **Dashboard**: today widgets (mood / energy / anxiety averages + entry type counts) and a 30-day line chart for mood/energy/anxiety. **All aggregation uses open numeric fields only — no content is decrypted on the dashboard.**
+- **Recent entries feed**: metadata-only (timestamp, type, open scores, tags, sync source).
 
 ---
 
@@ -49,23 +55,28 @@ First startup: Alembic runs `upgrade head` automatically before uvicorn boots
 
 ---
 
-## Smoke test (Phase 1 acceptance)
+## Phase 2 acceptance (DoD)
 
 On `http://localhost:5173`:
 
-1. Enter a username and a password (≥ 8 chars). Click **Register**.
-2. Click **Login & derive KEK**. The frontend derives the KEK in-memory only.
-3. Type a private note, pick a mood score, click **Encrypt & POST /api/entries/sync**.
-4. Click **GET /api/entries & decrypt locally** — the note should come back decrypted.
+1. On `/login` register a user (≥ 8-char password), then log in — you're redirected to `/checkin`.
+2. Fill **Daily** check-in (mood/energy/anxiety/focus/social/stress + notes) and save. A green toast confirms it's encrypted and queued.
+3. Switch to **Thought** tab, write a short thought with tags, save.
+4. Switch to **Gratitude** tab, enter three items, save.
+5. Open `/dashboard`:
+   - Today widgets show non-`—` values for mood/energy/anxiety and an entry count.
+   - The 30-day line chart renders a point for today.
+   - Recent activity feed shows all three entries with `synced` badges (after sync tick).
+6. Disconnect network → page keeps working (the top-right badge turns into `offline`, dashboard shows a soft grey info banner). Submit another entry → it appears immediately with a `pending` badge. Reconnect → within 30 s it flips to `synced`.
+7. Refresh the page (F5) while authenticated → an **unlock modal** appears over a faded dashboard. Type the master password → KEK is re-derived locally (verified against an existing entry) and the UI becomes interactive again. A wrong password is rejected with a clear error.
 
-To confirm the server sees no plaintext, inspect the DB directly:
+Confirm the server still sees only ciphertext:
 
 ```powershell
-docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c `
-  "SELECT id, entry_type, mood_score, left(encrypted_content, 40) AS ct FROM entries;"
+docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT id, entry_type, mood_score, left(encrypted_content, 40) AS ct FROM entries ORDER BY timestamp DESC LIMIT 5;"
 ```
 
-You should see `mood_score` in clear and `encrypted_content` as an opaque base64 blob.
+`mood_score` is a plain integer, `encrypted_content` is an opaque base64 blob. No plaintext anywhere in the DB.
 
 ---
 
@@ -97,12 +108,38 @@ You should see `mood_score` in clear and `encrypted_content` as an opaque base64
     ├── tailwind.config.js
     └── src/
         ├── main.tsx
-        ├── App.tsx            # Phase 1 smoke-test UI
+        ├── App.tsx                          # Router root + providers
         ├── index.css
+        ├── context/
+        │   ├── AuthContext.tsx              # JWT + salt in sessionStorage; KEK memory only; unlock()
+        │   └── SyncContext.tsx              # Single global SyncManager
+        ├── db/
+        │   └── offlineQueue.ts              # Dexie schema + enqueue / markSynced / markError
+        ├── sync/
+        │   └── syncManager.ts               # Interval + online/visibility-driven push loop
         ├── lib/
-        │   ├── crypto.ts      # Web Crypto API: KEK / DEK / encrypt / decrypt
-        │   └── api.ts
-        └── hooks/useAuth.ts   # Holds JWT + KEK in memory (never persisted)
+        │   ├── crypto.ts                    # Web Crypto API: KEK / DEK / encrypt / decrypt
+        │   ├── api.ts
+        │   └── entrySubmit.ts               # encrypt + enqueue helper
+        ├── hooks/
+        │   └── useEntries.ts                # React Query + Dexie merged feed
+        ├── pages/
+        │   ├── LoginPage.tsx
+        │   ├── CheckinPage.tsx              # Type selector → dynamic form
+        │   └── DashboardPage.tsx
+        └── components/
+            ├── Layout.tsx                   # Nav + SyncBadge (online/offline-aware) + Outlet
+            ├── ProtectedRoute.tsx           # Shows UnlockOverlay when KEK is missing
+            ├── UnlockOverlay.tsx            # Re-derive KEK after refresh
+            ├── ui/Slider.tsx
+            ├── checkin/
+            │   ├── DailyCheckinForm.tsx
+            │   ├── ThoughtForm.tsx
+            │   └── GratitudeForm.tsx
+            └── dashboard/
+                ├── TodayWidgets.tsx
+                ├── MoodTrendChart.tsx       # Recharts LineChart (30 days, daily avg)
+                └── RecentEntries.tsx        # Metadata-only activity feed
 ```
 
 ---

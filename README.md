@@ -12,7 +12,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 |---|---|---|
 | 1 — Core foundation | ✅ done | Docker stack, DB schema, JWT auth, encrypted entries sync, Web Crypto module |
 | 2 — Daily check-in | ✅ done | `/checkin` with dynamic forms, Dexie offline queue, SyncManager, `/dashboard` with mood trend |
-| 3 — Psychology | — | EMOTIONAL_STATE (gap model), gratitude chart, `/psychology` |
+| 3 — Psychology | ✅ done | `/psychology` with gap-model chart, pattern insights, gratitude log, emotional history (lazy decrypt); EMOTIONAL_STATE form in Check-in |
 | 4 — Skills & habits | — | Skill builder, SKILL_SESSION form, habit heatmap |
 | 5 — Analytics & polish | — | `/api/analytics/*`, correlations, body metrics, sleep, JSON export |
 
@@ -25,6 +25,17 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 - **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit / sleep / meal forms come in later phases.
 - **Dashboard**: today widgets (mood / energy / anxiety averages + entry type counts) and a 30-day line chart for mood/energy/anxiety. **All aggregation uses open numeric fields only — no content is decrypted on the dashboard.**
 - **Recent entries feed**: metadata-only (timestamp, type, open scores, tags, sync source).
+
+### Phase 3 details
+
+- **EMOTIONAL_STATE form** (`/checkin` → "Emotion" tab): full gap-model with per-emotion toggle — resentment (expectation / reality / trigger), guilt (my_action / perceived_expectation), shame (action / ideal_self), fear (threat / missing_solution) — plus a free-form reflection and a `cognitive_distortion` dropdown. Only the four intensity scores (0–10) leave the device as open fields; every text field is encrypted.
+- **`/psychology` page**:
+  - `GapChart` — 30-day line chart with 4 series (resentment / guilt / shame / fear) built **purely from open scores** — no decryption needed, renders even without a KEK.
+  - `PatternInsights` — per-emotion average + peak day over the last 30 days. Open-field aggregates only.
+  - `GratitudeLog` — eagerly decrypts the last 20 GRATITUDE entries client-side for a scannable list of items.
+  - `EmotionalHistory` — list of recent EMOTIONAL_STATE rows with scores visible at a glance; the encrypted gap-model breakdown is decrypted lazily **on click**, one row at a time.
+- **`useDecryptedEntries<T>(entries, kek)`** hook: batch-decrypts by id into a stable map, caches per mount so rows are never decrypted twice. Dropped on unmount — no plaintext ever reaches IndexedDB or localStorage.
+- No backend changes: the `resentment_score` / `guilt_score` / `shame_score` / `fear_score` columns were already provisioned in the Phase 1 migration.
 
 ---
 
@@ -80,6 +91,25 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT id, entry
 
 ---
 
+## Phase 3 acceptance (DoD)
+
+1. Open `/checkin` → new **Emotion** tab is present.
+2. Enable 2–3 of the four emotion cards (e.g. Resentment + Fear), set intensities, fill some text fields, pick a cognitive distortion, save. Green toast appears.
+3. Open `/psychology`:
+   - **Gap-model chart** renders lines for the emotions you just scored. Emotions you didn't enable don't appear — `connectNulls` is off, so days without data are gaps, not zeros.
+   - **Pattern insights** shows the per-emotion average and peak day for the last 30 days.
+   - **Gratitude log** decrypts recent gratitude entries client-side and lists their items.
+   - **Emotional history** shows each row with R/G/S/F score badges; clicking "show" decrypts that row only and reveals the gap-model breakdown.
+4. Verify the server still sees only scores + ciphertext for emotional entries:
+
+```powershell
+docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_type, resentment_score, guilt_score, shame_score, fear_score, left(encrypted_content, 40) AS ct FROM entries WHERE entry_type='EMOTIONAL_STATE' ORDER BY timestamp DESC LIMIT 5;"
+```
+
+Scores are plain integers, `encrypted_content` is opaque. The distortion label, expectations, reality, reflection — none of them appear anywhere in the DB.
+
+---
+
 ## Project layout
 
 ```
@@ -122,11 +152,13 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT id, entry
         │   ├── api.ts
         │   └── entrySubmit.ts               # encrypt + enqueue helper
         ├── hooks/
-        │   └── useEntries.ts                # React Query + Dexie merged feed
+        │   ├── useEntries.ts                # React Query + Dexie merged feed
+        │   └── useDecryptedEntries.ts       # Batch / lazy client-side decryption cache
         ├── pages/
         │   ├── LoginPage.tsx
         │   ├── CheckinPage.tsx              # Type selector → dynamic form
-        │   └── DashboardPage.tsx
+        │   ├── DashboardPage.tsx
+        │   └── PsychologyPage.tsx           # Gap chart + insights + gratitude + history
         └── components/
             ├── Layout.tsx                   # Nav + SyncBadge (online/offline-aware) + Outlet
             ├── ProtectedRoute.tsx           # Shows UnlockOverlay when KEK is missing
@@ -134,12 +166,18 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT id, entry
             ├── ui/Slider.tsx
             ├── checkin/
             │   ├── DailyCheckinForm.tsx
+            │   ├── EmotionalStateForm.tsx   # Gap-model: 4 toggleable emotions + reflection + distortion
             │   ├── ThoughtForm.tsx
             │   └── GratitudeForm.tsx
-            └── dashboard/
-                ├── TodayWidgets.tsx
-                ├── MoodTrendChart.tsx       # Recharts LineChart (30 days, daily avg)
-                └── RecentEntries.tsx        # Metadata-only activity feed
+            ├── dashboard/
+            │   ├── TodayWidgets.tsx
+            │   ├── MoodTrendChart.tsx       # Recharts LineChart (30 days, daily avg)
+            │   └── RecentEntries.tsx        # Metadata-only activity feed
+            └── psychology/
+                ├── GapChart.tsx             # 4-line chart (resentment/guilt/shame/fear)
+                ├── PatternInsights.tsx      # Open-field aggregates (avg, peak)
+                ├── GratitudeLog.tsx         # Eager client-side decryption
+                └── EmotionalHistory.tsx     # Lazy per-row decryption
 ```
 
 ---

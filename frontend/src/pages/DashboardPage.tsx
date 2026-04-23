@@ -6,7 +6,7 @@ import { isNetworkError } from "../lib/api";
 
 export default function DashboardPage() {
   const { entries, isLoading, error, pendingCount } = useEntries();
-  const offline = error && isNetworkError(error);
+  const offline: boolean = error ? isNetworkError(error) : false;
 
   return (
     <div className="space-y-6">

@@ -1,13 +1,15 @@
 import { useState } from "react";
 import DailyCheckinForm from "../components/checkin/DailyCheckinForm";
+import EmotionalStateForm from "../components/checkin/EmotionalStateForm";
 import GratitudeForm from "../components/checkin/GratitudeForm";
 import ThoughtForm from "../components/checkin/ThoughtForm";
 import { useSync } from "../context/SyncContext";
 
-type EntryType = "DAILY_CHECKIN" | "THOUGHT" | "GRATITUDE";
+type EntryType = "DAILY_CHECKIN" | "EMOTIONAL_STATE" | "THOUGHT" | "GRATITUDE";
 
 const TABS: { id: EntryType; label: string; hint: string }[] = [
   { id: "DAILY_CHECKIN", label: "Daily", hint: "Morning / evening check-in" },
+  { id: "EMOTIONAL_STATE", label: "Emotion", hint: "Gap-model work on a specific feeling" },
   { id: "THOUGHT", label: "Thought", hint: "A free-form journal entry" },
   { id: "GRATITUDE", label: "Gratitude", hint: "Three specific things" },
 ];
@@ -48,6 +50,7 @@ export default function CheckinPage() {
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
         {active === "DAILY_CHECKIN" && <DailyCheckinForm onSubmitted={onSubmitted} />}
+        {active === "EMOTIONAL_STATE" && <EmotionalStateForm onSubmitted={onSubmitted} />}
         {active === "THOUGHT" && <ThoughtForm onSubmitted={onSubmitted} />}
         {active === "GRATITUDE" && <GratitudeForm onSubmitted={onSubmitted} />}
       </div>

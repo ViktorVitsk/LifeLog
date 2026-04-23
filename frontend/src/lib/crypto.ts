@@ -19,9 +19,13 @@ const AES_GCM_TAG_BITS = 128;
 // Low-level helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function hexToBytes(hex: string): Uint8Array {
+// Note: every helper below returns `Uint8Array<ArrayBuffer>` (NOT the default
+// `Uint8Array<ArrayBufferLike>`) so the results satisfy the stricter
+// `BufferSource = ArrayBufferView<ArrayBuffer>` constraint that Web Crypto
+// parameter types use in modern lib.dom.d.ts.
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   if (hex.length % 2 !== 0) throw new Error("Invalid hex string length");
-  const out = new Uint8Array(hex.length / 2);
+  const out = new Uint8Array(new ArrayBuffer(hex.length / 2));
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(hex.substr(i * 2, 2), 16);
   }
@@ -34,15 +38,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
-  const out = new Uint8Array(binary.length);
+  const out = new Uint8Array(new ArrayBuffer(binary.length));
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;
 }
 
-function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
+function concatBytes(
+  a: Uint8Array,
+  b: Uint8Array,
+): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(a.length + b.length));
   out.set(a, 0);
   out.set(b, a.length);
   return out;

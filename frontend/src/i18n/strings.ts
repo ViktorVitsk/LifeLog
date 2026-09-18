@@ -212,10 +212,16 @@ export const STRINGS = {
     moodEnergyAnxiety: "Настроение / энергия / тревога",
     noCheckinYet: "Пока нет данных — сделайте первый чекин.",
     analyticsTitle: "Аналитика",
-    analyticsHint: "Агрегаты по открытым метрикам. Шифротекст сервер не читает.",
+    analyticsHint: "Агрегаты по открытым метрикам с явной шкалой и правилом. Шифротекст сервер не читает.",
     period: "Период",
     noMetricPoints: "В этом периоде нет точек по выбранной метрике.",
-    correlation: "Корреляция (один день)",
+    seriesCoverage: "{agg} · n={n} · дней {days}/{period} ({pct}%)",
+    jointCoverage: "совместных дней: {n} · сдвиг {lag}",
+    insufficientJoint: "Мало совместных наблюдений. Это нормальный результат, а не скрытая корреляция.",
+    aggAvg: "среднее",
+    aggSum: "сумма",
+    lagDays: "сдвиг, дни",
+    correlation: "Сравнение (выбираете сами)",
     vs: "против",
     sleepH: "Сон (ч)",
     sleepQuality: "Качество сна",
@@ -644,10 +650,16 @@ export const STRINGS = {
     moodEnergyAnxiety: "Mood / Energy / Anxiety",
     noCheckinYet: "No data yet — submit your first check-in.",
     analyticsTitle: "Analytics",
-    analyticsHint: "Server-side aggregates on open metrics only — no ciphertext is read.",
+    analyticsHint: "Open-metric aggregates with an explicit scale and rule. The server never reads ciphertext.",
     period: "Period",
     noMetricPoints: "No points in this range for the selected metric.",
-    correlation: "Correlation (same UTC day)",
+    seriesCoverage: "{agg} · n={n} · days {days}/{period} ({pct}%)",
+    jointCoverage: "joint days: {n} · lag {lag}",
+    insufficientJoint: "Not enough joint observations. That is a normal result, not a hidden correlation.",
+    aggAvg: "average",
+    aggSum: "sum",
+    lagDays: "lag, days",
+    correlation: "Comparison (you choose the pair)",
     vs: "vs",
     sleepH: "Sleep (h)",
     sleepQuality: "Sleep quality",
@@ -920,6 +932,8 @@ export function metricLabel(t: TStrings, metric: string): string {
       return t.focus;
     case "stress_score":
       return t.stress;
+    case "session_duration_min":
+      return t.sessionDuration;
     default:
       return metric.replaceAll("_", " ");
   }

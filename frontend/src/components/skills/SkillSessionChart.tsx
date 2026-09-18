@@ -11,6 +11,7 @@ import {
 import { useLocale } from "../../context/LocaleContext";
 import { dateLocale } from "../../i18n/locale";
 import type { EntryRead } from "../../lib/api";
+import { calendarDayKey, getAccountTimeZone } from "../../lib/dates";
 
 interface Props {
   entries: EntryRead[];
@@ -76,36 +77,23 @@ interface BarPoint {
 
 function buildDailyBars(entries: EntryRead[], days: number): BarPoint[] {
   const now = new Date();
-  const start = new Date(now);
-  start.setDate(start.getDate() - (days - 1));
-  start.setHours(0, 0, 0, 0);
-
+  const zone = getAccountTimeZone();
   const sums = new Map<string, number>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    sums.set(dayKey(d), 0);
+  for (let i = days - 1; i >= 0; i--) {
+    const instant = new Date(now.getTime() - i * 24 * 3600_000);
+    sums.set(calendarDayKey(instant, zone), 0);
   }
 
   for (const e of entries) {
     if (e.entry_type !== "SKILL_SESSION") continue;
     const m = e.session_duration_min;
     if (typeof m !== "number" || m <= 0) continue;
-    const ts = new Date(e.timestamp);
-    if (ts < start) continue;
-    const k = dayKey(ts);
+    const k = calendarDayKey(e.timestamp, e.event_timezone || zone);
     if (!sums.has(k)) continue;
     sums.set(k, (sums.get(k) ?? 0) + m);
   }
 
   return [...sums.entries()].map(([day, minutes]) => ({ day, minutes }));
-}
-
-function dayKey(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 function formatDayTick(s: string, loc: string) {

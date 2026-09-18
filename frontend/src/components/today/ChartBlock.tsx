@@ -33,11 +33,17 @@ function TrendBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: strin
   const metric = spec.metric ?? "mood_score";
   const period = spec.period ?? "30d";
   const q = useQuery({
-    queryKey: ["agent-trend", userId, metric, period],
+    queryKey: ["agent-trend", userId, metric, period, spec.habit_id, spec.skill_id],
     enabled: Boolean(token && userId),
-    queryFn: () => api.getTrends(token!, { metric, period }),
+    queryFn: () =>
+      api.getTrends(token!, {
+        metric,
+        period,
+        habit_id: spec.habit_id,
+        skill_id: spec.skill_id,
+      }),
   });
-  const data = (q.data ?? []).map((p) => ({ ...p, tick: p.day.slice(5) }));
+  const data = (q.data?.points ?? []).map((p) => ({ ...p, tick: p.day.slice(5) }));
   const label = metricLabel(t, metric);
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
@@ -75,11 +81,11 @@ function ScatterBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: str
   const y = spec.y ?? "mood_score";
   const period = spec.period ?? "30d";
   const q = useQuery({
-    queryKey: ["agent-corr", userId, x, y, period],
+    queryKey: ["agent-corr", userId, x, y, period, spec.habit_id],
     enabled: Boolean(token && userId),
-    queryFn: () => api.getCorrelations(token!, { x, y, period }),
+    queryFn: () => api.getCorrelations(token!, { x, y, period, habit_id: spec.habit_id }),
   });
-  const data = q.data ?? [];
+  const data = q.data?.points ?? [];
   const xLabel = metricLabel(t, x);
   const yLabel = metricLabel(t, y);
   return (
@@ -87,7 +93,7 @@ function ScatterBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: str
       <div className="text-xs text-zinc-400 mb-1">{spec.title ?? `${xLabel} ${t.vs} ${yLabel}`}</div>
       {data.length === 0 ? (
         <div className={`${heightClass} flex items-center justify-center text-sm text-zinc-500`}>
-          {t.needOverlap}
+          {q.data?.insufficient ? t.insufficientJoint : t.needOverlap}
         </div>
       ) : (
         <div className={heightClass}>

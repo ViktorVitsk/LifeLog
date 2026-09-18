@@ -94,7 +94,9 @@ def test_live_timezone_and_local_calendar_day():
             params={"metric": "mood_score", "period": "7d"},
         )
         assert trends.status_code == 200, trends.text
-        by_day = {point["day"]: point["value"] for point in trends.json()}
+        body = trends.json()
+        points = body["points"] if isinstance(body, dict) else body
+        by_day = {point["day"]: point["value"] for point in points}
         assert "2026-09-19" in by_day
         assert by_day["2026-09-19"] == 6
         assert "2026-09-18" not in by_day

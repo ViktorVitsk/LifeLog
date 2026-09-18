@@ -17,8 +17,8 @@ Living document. A stage is not done just because files exist — behaviour chec
 | B1 Sync contract | checked (unit + live API) | Per-item created/duplicate/conflict/rejected |
 | B2 Delete / undo | checked (unit + live API) | Version, soft-delete, queued undo, no GET resurrection |
 | B3 Timezone / calendar day | checked (unit + live API) | IANA zone, event vs input time, sleep = wake day |
-| B4 Aggregation | not started | Next |
-| B5 Schema / export | not started | |
+| B4 Aggregation | checked (unit + live API) | Catalog, SUM vs AVG, n/coverage, chosen pairs + lag |
+| B5 Schema / export | not started | Next |
 | C Goals / memory / actions | not started | |
 | D Chat modes | not started | |
 
@@ -51,6 +51,7 @@ Living document. A stage is not done just because files exist — behaviour chec
 9. **B1:** HTTP 200 + per-item `results[]`. Client marks `synced` only for `created` | `duplicate`. `conflict` / `rejected` become local `rejected` and are not retried. One bad row does not fail siblings. Logs are counts + reason codes, never ciphertext. Catalog create stays owner-scoped; entry FKs must belong to the current user.
 10. **B2:** `entries.version` + `deleted_at`. Undo writes `pending_delete` (tombstone), not a local-only wipe. GET/analytics/export skip soft-deleted rows. Delete retry of an already-deleted or missing id is `deleted` (idempotent). Stale version on a live row is `conflict`. A create that lands after local undo is not marked `synced`. No event sourcing.
 11. **B3:** Instants stay UTC. Account `users.timezone` is IANA. Entries store `recorded_at` (input) and `event_timezone` (snapshot so a later trip does not rewrite old days). Calendar day is the civil date in `event_timezone` or the account zone. SLEEP `timestamp` is wake/end; the night belongs to that local day, not bedtime. «Вчера вечером» is 20:00 yesterday in the account zone. Fingerprint for idempotency does not include `recorded_at` / `event_timezone` (retry without them is still `duplicate`).
+12. **B4:** Each open metric has scale, unit, range, aggregation, required filters, and missing=`skip`. Session minutes are summed per day; mood is averaged with `n`. `habit_value` / `habit_completed` require `habit_id` so habits are not mixed. Trends/correlations return period, observations, day coverage. Comparisons are user-chosen pairs plus an optional lag. Joint n < 3 is `insufficient` with empty points — not a hidden correlation. No nightly rollups.
 
 ## Future split of auth vs encryption (A5)
 
@@ -74,10 +75,10 @@ npm test
 Backend unit:
 
 ```
-cd backend && uv run pytest tests/test_sync_contract.py tests/test_calendar_days.py
+cd backend && uv run pytest tests/test_sync_contract.py tests/test_calendar_days.py tests/test_metrics.py
 ```
 
-21 passed.
+25 passed.
 
 Live API (host uvicorn + Compose Postgres):
 
@@ -87,6 +88,7 @@ LIFELOG_LIVE_API=1 uv run pytest tests/test_sync_api_live.py tests/test_calendar
 
 - B1/B2: mixed batch, identical retry → `duplicate`, different ciphertext → `conflict`, delete → gone from GET, delete retry → `deleted`.
 - B3 (`qa_b3_*`): invalid IANA rejected; register/PUT timezone; 22:00Z in `Europe/Moscow` buckets as `2026-09-19` on `/trends`, not `2026-09-18`.
+- B4 (`qa_b4_*`): catalog lists SUM vs AVG; `habit_value` without `habit_id` → 400; two mood scores average to 7 with n=2; two sessions sum to 30; one joint pair with lag=1 is `insufficient`.
 
 Alembic on this test volume: `0001`–`0006`.
 
@@ -98,8 +100,8 @@ Not run: Cursor browser UI, OpenRouter/Ollama, `docker compose` backend/frontend
 - Undo UI was not clicked in a browser; behaviour is covered by unit + live API.
 - Charts under `today` policy still use the 7d open-metrics API enum (no 1-day period).
 - Old LLM settings row `id=default` is not auto-attached; re-save agent settings per account.
-- Analytics still average every metric (B4). Export still one page (B5). Goals/memory (C) and chat modes (D) are out of this pass.
+- Export still one page (B5). Goals/memory (C) and chat modes (D) are out of this pass.
 
 ## Next
 
-B4: metric catalog (scale, unit, range, aggregation, filters, missing), period / n / day coverage, joint n + lag for chosen comparisons, no random correlations.
+B5: UI/API/DB ranges 1–10, Alembic CHECK without silent rewrite, habit-history indexes, paginated full export, decrypt errors in the export report.

@@ -28,6 +28,7 @@ const TREND_KEYS = [
   "body_fat_pct",
   "focus_score",
   "stress_score",
+  "session_duration_min",
 ] as const;
 
 const CORR_X_KEYS = ["sleep_quality", "sleep_hours", "energy_score"] as const;
@@ -40,6 +41,7 @@ export default function AnalyticsPage() {
   const [metric, setMetric] = useState("mood_score");
   const [corrX, setCorrX] = useState("sleep_quality");
   const [corrY, setCorrY] = useState("mood_score");
+  const [lagDays, setLagDays] = useState(0);
 
   const metricName = metricLabel(t, metric);
   const xName = metricLabel(t, corrX);
@@ -53,22 +55,23 @@ export default function AnalyticsPage() {
   });
 
   const corrQuery = useQuery({
-    queryKey: ["analytics", "corr", userId, period, corrX, corrY],
+    queryKey: ["analytics", "corr", userId, period, corrX, corrY, lagDays],
     enabled: Boolean(token && userId),
-    queryFn: () => api.getCorrelations(token!, { x: corrX, y: corrY, period }),
+    queryFn: () => api.getCorrelations(token!, { x: corrX, y: corrY, period, lag_days: lagDays }),
     retry: false,
   });
 
+  const trendSeries = trendsQuery.data;
   const trendChartData = useMemo(
     () =>
-      (trendsQuery.data ?? []).map((p) => ({
+      (trendSeries?.points ?? []).map((p) => ({
         ...p,
         tick: p.day.slice(5),
       })),
-    [trendsQuery.data],
+    [trendSeries],
   );
 
-  const scatterData = useMemo(() => corrQuery.data ?? [], [corrQuery.data]);
+  const scatterData = useMemo(() => corrQuery.data?.points ?? [], [corrQuery.data]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
@@ -108,6 +111,16 @@ export default function AnalyticsPage() {
             ))}
           </select>
         </div>
+        {trendSeries && (
+          <p className="text-xs text-zinc-500">
+            {t.seriesCoverage
+              .replace("{n}", String(trendSeries.observations))
+              .replace("{days}", String(trendSeries.days_with_data))
+              .replace("{period}", String(trendSeries.period_days))
+              .replace("{pct}", String(Math.round(trendSeries.coverage * 100)))
+              .replace("{agg}", trendSeries.aggregation === "sum" ? t.aggSum : t.aggAvg)}
+          </p>
+        )}
         {trendsQuery.isError && (
           <p className="text-xs text-rose-400">{(trendsQuery.error as Error).message}</p>
         )}
@@ -176,7 +189,25 @@ export default function AnalyticsPage() {
               </option>
             ))}
           </select>
+          <label className="flex items-center gap-1 text-xs text-zinc-400">
+            {t.lagDays}
+            <select
+              value={lagDays}
+              onChange={(e) => setLagDays(Number(e.target.value))}
+              className="rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-sm text-zinc-200"
+            >
+              <option value={0}>0</option>
+              <option value={1}>1</option>
+            </select>
+          </label>
         </div>
+        {corrQuery.data && (
+          <p className="text-xs text-zinc-500">
+            {t.jointCoverage
+              .replace("{n}", String(corrQuery.data.observations))
+              .replace("{lag}", String(corrQuery.data.lag_days))}
+          </p>
+        )}
         {corrQuery.isError && (
           <p className="text-xs text-rose-400">{(corrQuery.error as Error).message}</p>
         )}
@@ -184,7 +215,7 @@ export default function AnalyticsPage() {
           <div className="h-64 flex items-center justify-center text-sm text-zinc-500">{t.loading}</div>
         ) : scatterData.length === 0 ? (
           <div className="h-64 flex items-center justify-center text-sm text-zinc-500">
-            {t.needOverlap}
+            {corrQuery.data?.insufficient ? t.insufficientJoint : t.needOverlap}
           </div>
         ) : (
           <div className="h-64">

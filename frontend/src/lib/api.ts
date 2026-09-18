@@ -113,12 +113,43 @@ export type ExportMetadataRow = Omit<EntryRead, "encrypted_dek" | "encrypted_con
 export interface TrendPoint {
   day: string;
   value: number;
+  n?: number;
+}
+
+export interface TrendSeries {
+  period: string;
+  period_days: number;
+  metric: string;
+  aggregation: string;
+  unit: string;
+  scale_min?: number | null;
+  scale_max?: number | null;
+  observations: number;
+  days_with_data: number;
+  coverage: number;
+  insufficient: boolean;
+  points: TrendPoint[];
 }
 
 export interface CorrelationPoint {
   day: string;
   x: number;
   y: number;
+  n_x?: number;
+  n_y?: number;
+}
+
+export interface CorrelationSeries {
+  period: string;
+  period_days: number;
+  x: string;
+  y: string;
+  lag_days: number;
+  observations: number;
+  days_with_data: number;
+  coverage: number;
+  insufficient: boolean;
+  points: CorrelationPoint[];
 }
 
 export type HabitFrequency = "daily" | "weekly";
@@ -281,12 +312,33 @@ export const api = {
 
   async getTrends(
     token: string,
-    params: { metric: string; period?: "7d" | "30d" | "90d" | "1y" },
-  ): Promise<TrendPoint[]> {
+    params: {
+      metric: string;
+      period?: "7d" | "30d" | "90d" | "1y";
+      habit_id?: string;
+      skill_id?: string;
+    },
+  ): Promise<TrendSeries> {
     const q = new URLSearchParams();
     q.set("metric", params.metric);
     if (params.period) q.set("period", params.period);
-    return request(`/api/analytics/trends?${q.toString()}`, { token });
+    if (params.habit_id) q.set("habit_id", params.habit_id);
+    if (params.skill_id) q.set("skill_id", params.skill_id);
+    const raw = await request<TrendSeries | TrendPoint[]>(`/api/analytics/trends?${q.toString()}`, { token });
+    return Array.isArray(raw)
+      ? {
+          period: params.period ?? "30d",
+          period_days: raw.length,
+          metric: params.metric,
+          aggregation: "avg",
+          unit: "",
+          observations: raw.length,
+          days_with_data: raw.length,
+          coverage: 0,
+          insufficient: raw.length === 0,
+          points: raw,
+        }
+      : raw;
   },
 
   async getCorrelations(
@@ -295,13 +347,36 @@ export const api = {
       x: string;
       y: string;
       period?: "7d" | "30d" | "90d" | "1y";
+      lag_days?: number;
+      habit_id?: string;
+      skill_id?: string;
     },
-  ): Promise<CorrelationPoint[]> {
+  ): Promise<CorrelationSeries> {
     const q = new URLSearchParams();
     q.set("x", params.x);
     q.set("y", params.y);
     if (params.period) q.set("period", params.period);
-    return request(`/api/analytics/correlations?${q.toString()}`, { token });
+    if (params.lag_days != null) q.set("lag_days", String(params.lag_days));
+    if (params.habit_id) q.set("habit_id", params.habit_id);
+    if (params.skill_id) q.set("skill_id", params.skill_id);
+    const raw = await request<CorrelationSeries | CorrelationPoint[]>(
+      `/api/analytics/correlations?${q.toString()}`,
+      { token },
+    );
+    return Array.isArray(raw)
+      ? {
+          period: params.period ?? "30d",
+          period_days: raw.length,
+          x: params.x,
+          y: params.y,
+          lag_days: params.lag_days ?? 0,
+          observations: raw.length,
+          days_with_data: raw.length,
+          coverage: 0,
+          insufficient: raw.length === 0,
+          points: raw,
+        }
+      : raw;
   },
 
   async exportMetadata(

@@ -14,12 +14,12 @@ export interface SyncResult {
   error?: string;
 }
 
-export async function runSyncOnce(token: string): Promise<SyncResult> {
+export async function runSyncOnce(token: string, userId?: string): Promise<SyncResult> {
   if (!navigator.onLine) {
     return { attempted: 0, saved: 0, failed: 0, error: "offline" };
   }
 
-  const pending = await getPendingForSync(100);
+  const pending = await getPendingForSync(100, userId);
   if (pending.length === 0) return { attempted: 0, saved: 0, failed: 0 };
 
   const ids = pending.map((p) => p.id);
@@ -99,12 +99,13 @@ export interface SyncManagerHandle {
 
 export interface StartSyncOptions {
   getToken: () => string | null;
+  getUserId?: () => string | null;
   intervalMs?: number;
   onResult?: (r: SyncResult) => void;
 }
 
 export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
-  const { getToken, intervalMs = 30_000, onResult } = opts;
+  const { getToken, getUserId, intervalMs = 30_000, onResult } = opts;
 
   let stopped = false;
   let inFlight: Promise<void> | null = null;
@@ -112,9 +113,10 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
   async function tick() {
     if (stopped || inFlight) return;
     const token = getToken();
-    if (!token) return;
+    const userId = getUserId?.() ?? null;
+    if (!token || !userId) return;
     inFlight = (async () => {
-      const r = await runSyncOnce(token);
+      const r = await runSyncOnce(token, userId);
       onResult?.(r);
     })().finally(() => {
       inFlight = null;

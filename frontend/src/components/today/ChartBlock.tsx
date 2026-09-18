@@ -28,13 +28,13 @@ export default function ChartBlock({ spec, compact }: { spec: ChartSpec; compact
 }
 
 function TrendBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: string }) {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   const { t } = useLocale();
   const metric = spec.metric ?? "mood_score";
   const period = spec.period ?? "30d";
   const q = useQuery({
-    queryKey: ["agent-trend", metric, period],
-    enabled: Boolean(token),
+    queryKey: ["agent-trend", userId, metric, period],
+    enabled: Boolean(token && userId),
     queryFn: () => api.getTrends(token!, { metric, period }),
   });
   const data = (q.data ?? []).map((p) => ({ ...p, tick: p.day.slice(5) }));
@@ -69,14 +69,14 @@ function TrendBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: strin
 }
 
 function ScatterBlock({ spec, heightClass }: { spec: ChartSpec; heightClass: string }) {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   const { t } = useLocale();
   const x = spec.x ?? "sleep_quality";
   const y = spec.y ?? "mood_score";
   const period = spec.period ?? "30d";
   const q = useQuery({
-    queryKey: ["agent-corr", x, y, period],
-    enabled: Boolean(token),
+    queryKey: ["agent-corr", userId, x, y, period],
+    enabled: Boolean(token && userId),
     queryFn: () => api.getCorrelations(token!, { x, y, period }),
   });
   const data = q.data ?? [];

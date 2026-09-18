@@ -34,7 +34,7 @@ const CORR_X_KEYS = ["sleep_quality", "sleep_hours", "energy_score"] as const;
 const CORR_Y_KEYS = ["mood_score", "anxiety_score", "stress_score"] as const;
 
 export default function AnalyticsPage() {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   const { t } = useLocale();
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>("30d");
   const [metric, setMetric] = useState("mood_score");
@@ -46,15 +46,15 @@ export default function AnalyticsPage() {
   const yName = metricLabel(t, corrY);
 
   const trendsQuery = useQuery({
-    queryKey: ["analytics", "trends", period, metric],
-    enabled: Boolean(token),
+    queryKey: ["analytics", "trends", userId, period, metric],
+    enabled: Boolean(token && userId),
     queryFn: () => api.getTrends(token!, { metric, period }),
     retry: false,
   });
 
   const corrQuery = useQuery({
-    queryKey: ["analytics", "corr", period, corrX, corrY],
-    enabled: Boolean(token),
+    queryKey: ["analytics", "corr", userId, period, corrX, corrY],
+    enabled: Boolean(token && userId),
     queryFn: () => api.getCorrelations(token!, { x: corrX, y: corrY, period }),
     retry: false,
   });

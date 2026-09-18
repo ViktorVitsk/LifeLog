@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { decryptEntry } from "../lib/crypto";
 import type { EntryRead } from "../lib/api";
 import type { MergedEntry } from "./useEntries";
+import { useAuth } from "../context/AuthContext";
 
 type AnyEntry = Pick<EntryRead, "id" | "encrypted_content" | "encrypted_dek">;
 
@@ -30,13 +31,14 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const seenRef = useRef<Set<string>>(new Set());
+  const { userId } = useAuth();
 
-  // New KEK → drop all cached plaintext and retry decrypts for this mount.
+  // New KEK or account → drop cached plaintext.
   useEffect(() => {
     seenRef.current.clear();
     setData({});
     setErrors({});
-  }, [kek]);
+  }, [kek, userId]);
 
   const entrySig = entries
     .map((e) => `${e.id}:${(e.encrypted_content ?? "").length}:${(e.encrypted_dek ?? "").length}`)

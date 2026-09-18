@@ -31,11 +31,11 @@ function normalizeLocal(p: PendingEntry): MergedEntry {
 }
 
 export function useEntries() {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
 
   const serverQuery = useQuery<EntryRead[]>({
-    queryKey: ["entries"],
-    enabled: Boolean(token),
+    queryKey: ["entries", userId],
+    enabled: Boolean(token && userId),
     queryFn: () => {
       const t = getSessionToken();
       if (!t) throw new AuthError("session expired");
@@ -48,22 +48,23 @@ export function useEntries() {
   const merged = useMemo<MergedEntry[]>(() => {
     const byId = new Map<string, MergedEntry>();
 
-    // Local first (includes pending / error / already-synced).
-    // This guarantees no flicker: a freshly synced row keeps rendering
-    // even if the server refetch hasn't completed yet.
     for (const row of local ?? []) {
+      if (!userId || row.owner_user_id !== userId) continue;
       byId.set(row.id, normalizeLocal(row));
     }
-    // Server wins on the fields it owns (timestamps, created_at, etc.).
     for (const row of serverQuery.data ?? []) {
       byId.set(row.id, { ...row, _source: "server" });
     }
     return [...byId.values()].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
-  }, [serverQuery.data, local]);
+  }, [serverQuery.data, local, userId]);
 
   const pendingCount = useMemo(
-    () => (local ?? []).filter((r) => r.status === "pending" || r.status === "error").length,
-    [local],
+    () =>
+      (local ?? []).filter(
+        (r) =>
+          (r.status === "pending" || r.status === "error") && userId && r.owner_user_id === userId,
+      ).length,
+    [local, userId],
   );
 
   return {

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 
@@ -28,3 +30,15 @@ class LoginResponse(BaseModel):
 class RefreshResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class MeResponse(BaseModel):
+    id: UUID
+    username: str
+    encrypted_kek_verifier_content: str | None = None
+    encrypted_kek_verifier_dek: str | None = None
+
+
+class KekVerifierPut(BaseModel):
+    encrypted_content: str = Field(min_length=16, max_length=16_384)
+    encrypted_dek: str = Field(min_length=16, max_length=16_384)

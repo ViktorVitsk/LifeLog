@@ -8,7 +8,7 @@
 Do NOT start coding immediately. First, output a short confirmation that you understand these 5 points:
 
 1. The primary data model is **one central `entries` table** with polymorphic `entry_type` — NOT 15 separate tables.
-2. **Sensitive text fields are encrypted on the CLIENT side** (Web Crypto API). The server stores binary blobs. The server can never read diary content.
+2. **Sensitive text fields are encrypted on the CLIENT side** (Web Crypto API). The server stores binary blobs. A stolen database without the password does not reveal diary **text**. Open metrics, types, timestamps, and tags stay readable. The login password is sent to the auth API, so the auth server is trusted with the secret that also derives the KEK.
 3. **Numeric metrics and entry types are NOT encrypted** — they stay open for server-side analytics and graph queries.
 4. The `context_tags` table is always open (unencrypted) to enable analytics without decryption.
 5. You will proceed **phase by phase** and wait for user confirmation before starting each new phase.
@@ -60,7 +60,8 @@ LifeLog is a **local-first web application** for structured personal data loggin
 The server stores **encrypted text blobs + open numeric metrics**.
 
 - ✅ Text content (thoughts, reflections, triggers) — encrypted on client
-- ✅ Server cannot read diary entries even with full DB access
+- ⚠️ Server cannot read diary **text** from stored ciphertext without the password
+- ⚠️ The same password is submitted to `/api/auth/login`; a compromised auth server could derive the KEK using `password_salt`
 - ✅ Numeric metrics stay open → server can run analytics queries fast
 - ✅ Entry types and timestamps stay open → server can filter without decryption
 
@@ -543,13 +544,13 @@ Tabs over Dashboard, Psychology, Skills, Habits, Analytics (open-metric graphs u
 - [ ] Client-side OpenAI-compatible tool loop (browser → OpenRouter or host Ollama). LifeLog FastAPI never sees chat plaintext and never proxies the LLM.
 - [ ] API key stored in IndexedDB wrapped with the KEK (same AES-GCM as entries). Chat turns stored as ciphertext in Dexie (`chat_turns`), not on Postgres.
 - [ ] Tool profiles: cloud gets the full catalog; local 7B (GTX 1070 8GB, Q4, 4k–8k ctx) gets four tools — `get_today_snapshot`, `propose_entries`, `show_chart`, `search_entries`.
-- [ ] `propose_entries` returns confirm cards; `commit_entries` / user Save call existing `encryptAndEnqueue`. Do not invent numeric scores that were not in the utterance. Inferred scores never auto-commit.
+- [ ] `propose_entries` returns confirm cards. Persist happens only after the user taps Save. The model cannot set `user_confirmed` or auto-commit. Inferred or missing scores stay absent; out-of-range numbers are errors, not clamped.
 - [ ] Provenance in encrypted JSON: `provenance` (`user_stated` | `agent_extracted` | `agent_inferred`), `confidence`, `source_turn_id`, `user_confirmed`. Open tags may include `agent` / `confirmed`.
 - [ ] `show_chart` renders Recharts in the thread (trends, scatter, habit heatmap, skill bars) from open metrics / existing components.
 - [ ] Mobile-first shell: bottom tab bar (Today, Timeline, Insights, Settings), `viewport-fit=cover`, `100dvh`, `visualViewport` so the keyboard does not cover the composer, tap targets ≥ 44px.
 - [ ] `/checkin` remains as fallback when the model is unavailable.
 
-**E2EE invariant (unchanged):** the LifeLog server stores ciphertext + open numbers only. OpenRouter sees the current chat plus tool results the client chose to send. A local Ollama model sees that payload on-device only.
+**Privacy invariant:** the LifeLog server stores ciphertext + open numbers. It does not decrypt diary text. OpenRouter sees the current chat plus tool results the client allowed. A local Ollama model sees that payload on-device only. Authentication still receives the master password.
 
 ---
 
@@ -560,7 +561,7 @@ Tabs over Dashboard, Psychology, Skills, Habits, Analytics (open-metric graphs u
 3. **All datetimes in UTC** (TIMESTAMPTZ in PostgreSQL, ISO 8601 in API).
 4. **UUID for all primary keys** (not integers).
 5. **Separate Pydantic schemas from SQLAlchemy models** — different files.
-6. **One user only** — this is a personal single-user app. No multi-tenancy needed.
+6. **Multi-account on one browser** — Postgres already scopes rows by `user_id`. IndexedDB must too (`owner_user_id`). Ownerless local rows are recovery, not auto-attach.
 7. **All routes protected by JWT** except /api/auth/register and /api/auth/login.
 8. **Alembic for all DB changes** — never use `create_all()` in production code.
 9. **JSONB for metric_schema and tags** — enables flexible schema without migrations.

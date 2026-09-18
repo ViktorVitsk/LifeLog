@@ -1,8 +1,8 @@
 # LifeLog
 
-Personal Digital Twin — local-first, client-side E2EE journaling & tracking.
+Personal journaling and tracking with **hybrid client-side encryption**: diary text is encrypted in the browser before sync; open numeric metrics stay available for charts. This is not end-to-end encryption against the login server — the same master password is sent to `/api/auth/login` and used to derive the on-device key.
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`docs/implementation-plan.md`](./docs/implementation-plan.md).
 
 ---
 
@@ -20,7 +20,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 ### Phase 2 details
 
 - **Routing**: `react-router-dom` with protected routes. `/login` → `/today` (primary). Manual forms remain at `/checkin`.
-- **Auth**: `AuthContext` mirrors `{ token, username, salt }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password so the KEK can be re-derived locally (no network round-trip). Wrong-password attempts are caught by unwrapping an existing entry's DEK.
+- **Auth**: `AuthContext` mirrors `{ token, username, salt, userId }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password. A successful JWT refresh is **not** treated as a key check. Unlock unwraps a KEK verifier or an existing ciphertext; if nothing can be checked, new writes are refused.
 - **Offline queue**: Dexie IndexedDB table `entries` with `status: pending | synced | error`. Every submission is encrypted client-side, enqueued optimistically, and displayed instantly on the dashboard.
 - **SyncManager** (single global instance via `SyncContext`): pushes pending rows every 30 s, on `online`, on `visibilitychange`, and on explicit `trigger()` after a form submit. Idempotent on the server (`ON CONFLICT DO NOTHING`). Network failures are caught as `NetworkError`, marked silently as "offline", and retried on the next tick; only genuine 4xx/5xx rejections flip a row into the `error` state.
 - **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit arrive in Phases 3–4; sleep / body metrics in Phase 5.

@@ -62,6 +62,13 @@ export interface LoginResponse {
   salt: string;
 }
 
+export interface MeResponse {
+  id: string;
+  username: string;
+  encrypted_kek_verifier_content?: string | null;
+  encrypted_kek_verifier_dek?: string | null;
+}
+
 export interface EntrySyncPayload {
   id: string;
   timestamp: string; // ISO UTC
@@ -200,6 +207,21 @@ export const api = {
     return request("/api/auth/refresh", {
       method: "POST",
       token,
+    });
+  },
+
+  async me(token: string): Promise<MeResponse> {
+    return request("/api/auth/me", { token });
+  },
+
+  async putKekVerifier(
+    token: string,
+    body: { encrypted_content: string; encrypted_dek: string },
+  ): Promise<void> {
+    await request("/api/auth/kek-verifier", {
+      method: "PUT",
+      token,
+      body: JSON.stringify(body),
     });
   },
 

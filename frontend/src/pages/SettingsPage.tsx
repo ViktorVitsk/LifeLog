@@ -3,6 +3,7 @@ import { loadLlmSettings, probeLlm, saveLlmSettings } from "../agent/settingsSto
 import { exportDecryptedTurns } from "../agent/chatStore";
 import { DEFAULT_LLM_SETTINGS, type ContextPolicy, type LlmProviderId, type LlmSettings } from "../agent/types";
 import LanguageSelect from "../components/LanguageSelect";
+import OrphanRecovery from "../components/OrphanRecovery";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useEntries, type MergedEntry } from "../hooks/useEntries";
@@ -118,6 +119,8 @@ export default function SettingsPage() {
           {t.settingsIntro} {username}.
         </p>
       </div>
+
+      <OrphanRecovery />
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
         <h2 className="text-sm font-medium text-zinc-200">{t.language}</h2>

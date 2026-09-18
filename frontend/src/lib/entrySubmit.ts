@@ -1,17 +1,9 @@
 import { enqueueEntry } from "../db/offlineQueue";
+import { appConfirmation } from "../agent/confirmation";
 import { encryptEntry } from "./crypto";
 import type { EntrySyncPayload } from "./api";
+import { assertEncryptAllowed } from "./accountScope";
 
-/**
- * Encrypt + enqueue an entry in one shot.
- *
- * The caller provides:
- *   - `plaintext`  — the JSON object that represents the ENCRYPTED schema
- *                    for this entry_type (see ARCHITECTURE §5).
- *   - `openFields` — the open, never-encrypted metadata (mood_score, etc.).
- *
- * We NEVER store `plaintext` anywhere — only its ciphertext.
- */
 export async function encryptAndEnqueue(args: {
   kek: CryptoKey;
   entry_type: string;
@@ -19,13 +11,30 @@ export async function encryptAndEnqueue(args: {
   openFields: Partial<
     Omit<EntrySyncPayload, "id" | "timestamp" | "entry_type" | "encrypted_content" | "encrypted_dek">
   >;
-  /** Client event time (ISO UTC). Defaults to now. */
   timestamp?: string;
   id?: string;
+  confirmation_source?: "entry_card" | "manual_form";
 }): Promise<{ id: string }> {
-  const { kek, entry_type, plaintext, openFields } = args;
+  assertEncryptAllowed();
+  const { kek, entry_type, openFields } = args;
 
-  const plaintextJson = JSON.stringify({ v: 1, ...plaintext });
+  const confirm =
+    args.plaintext.user_confirmed === true
+      ? {
+          user_confirmed: true,
+          confirmed_at: args.plaintext.confirmed_at,
+          confirmation_source: args.plaintext.confirmation_source,
+          confirmation_event_id: args.plaintext.confirmation_event_id,
+          source_turn_id: args.plaintext.source_turn_id ?? null,
+        }
+      : appConfirmation({ source: args.confirmation_source ?? "manual_form" });
+
+  const plaintextJson = JSON.stringify({
+    v: 1,
+    ...args.plaintext,
+    ...confirm,
+    user_confirmed: true,
+  });
   const { encryptedContent, encryptedDek } = await encryptEntry(plaintextJson, kek);
 
   const id = args.id ?? crypto.randomUUID();

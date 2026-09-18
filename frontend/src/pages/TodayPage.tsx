@@ -2,6 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listPinnedCharts, loadThreadForDay, saveThreadMessage } from "../agent/chatStore";
 import { commitProposedEntry } from "../agent/commit";
+import { appConfirmation } from "../agent/confirmation";
+import { resolveContextEnvelope } from "../agent/contextEnvelope";
+import { validateProposalForSave } from "../agent/proposalValidation";
 import { runAgent } from "../agent/runtime";
 import { loadLlmSettings } from "../agent/settingsStore";
 import type {
@@ -29,7 +32,7 @@ import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { api } from "../lib/api";
 
 export default function TodayPage() {
-  const { kek, token } = useAuth();
+  const { kek, token, userId } = useAuth();
   const { locale, t } = useLocale();
   const sync = useSync();
   const qc = useQueryClient();
@@ -53,9 +56,20 @@ export default function TodayPage() {
   const scroller = useRef<HTMLDivElement>(null);
   const threadRef = useRef<ThreadMessage[]>([]);
   threadRef.current = thread;
+  const runGen = useRef(0);
 
   useEffect(() => {
-    if (!kek) return;
+    abortRef.current?.abort();
+    runGen.current += 1;
+    setThread([]);
+    setDraft("");
+    setTools([]);
+    setErr(null);
+    setBusy(false);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!kek || !userId) return;
     void loadLlmSettings(kek).then(setSettings);
     void loadThreadForDay(kek).then(setThread);
     void listPinnedCharts().then((rows) => {
@@ -69,7 +83,7 @@ export default function TodayPage() {
       }
       setPinned(specs);
     });
-  }, [kek]);
+  }, [kek, userId]);
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
@@ -114,6 +128,7 @@ export default function TodayPage() {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    const gen = runGen.current;
 
     const userMsg: ThreadMessage = {
       id: crypto.randomUUID(),
@@ -129,6 +144,7 @@ export default function TodayPage() {
       .slice(-20)
       .map((m) => ({ role: m.role, content: m.content }));
 
+    const envelope = resolveContextEnvelope(settings);
     const rt: ToolRuntime = {
       kek,
       token,
@@ -140,6 +156,13 @@ export default function TodayPage() {
       sourceTurnId: userMsg.id,
       proposals: new Map(),
       charts: [],
+      envelope,
+      budget: {
+        envelope,
+        decryptedEntryIds: new Set(),
+        audit: [],
+        provider: settings.provider,
+      },
     };
 
     setBusy(true);
@@ -171,23 +194,19 @@ export default function TodayPage() {
         },
       });
 
-      if (result.committedIds.length) {
-        setUndo({ ids: result.committedIds, until: Date.now() + 10_000 });
-        sync.trigger();
-        await qc.invalidateQueries({ queryKey: ["entries"] });
-      }
-      if (rt.skills.length !== skills.length) await qc.invalidateQueries({ queryKey: ["skills"] });
-      if (rt.habits.length !== habits.length) await qc.invalidateQueries({ queryKey: ["habits"] });
+      if (gen !== runGen.current) return;
 
       const asst: ThreadMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: result.assistantText || (result.proposals.length ? t.cardsReady : ""),
         created_at: Date.now(),
+        source_user_turn_id: userMsg.id,
         proposals: result.proposals,
         charts: result.charts,
-        committed_ids: result.committedIds,
+        committed_ids: [],
         tools: result.tools,
+        context_audit: result.contextAudit,
       };
       setThread((t) => [...t, asst]);
       await persist(asst);
@@ -195,9 +214,10 @@ export default function TodayPage() {
       setTools([]);
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
+      if (gen !== runGen.current) return;
       setErr((e as Error).message);
     } finally {
-      setBusy(false);
+      if (gen === runGen.current) setBusy(false);
     }
   }
 
@@ -221,24 +241,30 @@ export default function TodayPage() {
   }
 
   async function saveProposal(msgId: string, p: ProposedEntry) {
-    if (!kek || !token) return;
+    if (!kek || !token || !userId) return;
     try {
-      let ready = p;
-      if (p.entry_type === "HABIT_LOG" && !p.habit_id) {
-        const name = p.habit_name?.trim();
+      const host = threadRef.current.find((m) => m.id === msgId);
+      const current = host?.proposals?.find((x) => x.id === p.id) ?? p;
+      const issues = validateProposalForSave(current);
+      if (issues.length) {
+        setErr(t.cardFixFields);
+        patchProposal(msgId, { ...current, issues });
+        return;
+      }
+      let ready = current;
+      if (ready.entry_type === "HABIT_LOG" && !ready.habit_id) {
+        const name = ready.habit_name?.trim();
         if (!name) {
           setErr(t.needHabitName);
           return;
         }
-        const existing = habits.find(
-          (h) => h.id === p.habit_id || h.name.trim().toLowerCase() === name.toLowerCase(),
-        );
+        const existing = habits.find((h) => h.name.trim().toLowerCase() === name.toLowerCase());
         if (existing) {
-          ready = { ...p, habit_id: existing.id, habit_name: existing.name };
+          ready = { ...ready, habit_id: existing.id, habit_name: existing.name };
         } else {
           const created = await api.createHabit(token, { name, frequency: "daily" });
-          ready = { ...p, habit_id: created.id, habit_name: created.name };
-          await qc.invalidateQueries({ queryKey: ["habits"] });
+          ready = { ...ready, habit_id: created.id, habit_name: created.name };
+          await qc.invalidateQueries({ queryKey: ["habits", userId] });
         }
       }
       if (ready.entry_type === "SKILL_SESSION" && !ready.skill_id) {
@@ -247,21 +273,20 @@ export default function TodayPage() {
           setErr(t.needSkillName);
           return;
         }
-        const existing = skills.find(
-          (s) => s.id === ready.skill_id || s.name.trim().toLowerCase() === name.toLowerCase(),
-        );
+        const existing = skills.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
         if (existing) {
           ready = { ...ready, skill_id: existing.id, skill_name: existing.name };
         } else {
           const created = await api.createSkill(token, { name });
           ready = { ...ready, skill_id: created.id, skill_name: created.name };
-          await qc.invalidateQueries({ queryKey: ["skills"] });
+          await qc.invalidateQueries({ queryKey: ["skills", userId] });
         }
       }
-      const { id } = await commitProposedEntry(ready, kek, {
-        source_turn_id: msgId,
-        user_confirmed: true,
+      const meta = appConfirmation({
+        source: "entry_card",
+        source_turn_id: host?.source_user_turn_id ?? null,
       });
+      const { id } = await commitProposedEntry(ready, kek, meta);
       setUndo({ ids: [id], until: Date.now() + 10_000 });
       const updated = rewriteMessage(msgId, (m) => ({
         ...m,
@@ -270,7 +295,7 @@ export default function TodayPage() {
       }));
       if (updated) await persistLatest(msgId);
       sync.trigger();
-      await qc.invalidateQueries({ queryKey: ["entries"] });
+      await qc.invalidateQueries({ queryKey: ["entries", userId] });
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -288,7 +313,7 @@ export default function TodayPage() {
     if (!undo) return;
     await deleteLocalEntries(undo.ids);
     setUndo(null);
-    await qc.invalidateQueries({ queryKey: ["entries"] });
+    await qc.invalidateQueries({ queryKey: ["entries", userId] });
   }
 
   const needsSetup = settings.provider === "openrouter" && !settings.api_key;
@@ -324,6 +349,7 @@ export default function TodayPage() {
                 ))}
               </div>
             ) : null}
+            <ContextAuditLine audit={m.context_audit} />
             {m.charts?.map((c, i) => (
               <ChartBlock key={`${m.id}-c${i}`} spec={c} />
             ))}
@@ -390,5 +416,19 @@ export default function TodayPage() {
         />
       </div>
     </div>
+  );
+}
+
+function ContextAuditLine({ audit }: { audit: ThreadMessage["context_audit"] }) {
+  const { t } = useLocale();
+  if (!audit) return null;
+  const searched = audit.tools.some((x) => x.name === "search_entries" || x.entry_ids.length > 0);
+  if (!searched && audit.unique_decrypted === 0) return null;
+  const n = new Set(audit.tools.flatMap((x) => x.entry_ids)).size;
+  return (
+    <p className="text-[11px] text-zinc-500">
+      {t.contextUsed.replace("{n}", String(n))}
+      {audit.sent_plaintext_to_model ? ` · ${t.contextPlaintextCloud}` : ` · ${t.contextOpenOnly}`}
+    </p>
   );
 }

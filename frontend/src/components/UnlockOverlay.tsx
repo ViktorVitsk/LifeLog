@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAuth, WrongPasswordError } from "../context/AuthContext";
+import { useAuth, KeyUnverifiedError, WrongPasswordError } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 
 /**
@@ -27,6 +27,8 @@ export default function UnlockOverlay() {
     } catch (e) {
       if (e instanceof WrongPasswordError) {
         setError(t.wrongPassword);
+      } else if (e instanceof KeyUnverifiedError) {
+        setError(t.kekUnverified);
       } else {
         setError((e as Error).message);
       }

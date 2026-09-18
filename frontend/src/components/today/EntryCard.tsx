@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { summaryLine } from "../../agent/commit";
+import { validateProposalForSave } from "../../agent/proposalValidation";
 import type { ProposedEntry } from "../../agent/types";
 import { useLocale } from "../../context/LocaleContext";
 import { entryTypeLabel } from "../../i18n/strings";
@@ -28,8 +29,10 @@ export default function EntryCard({
   const unmatched =
     (entry.entry_type === "HABIT_LOG" && !entry.habit_id) ||
     (entry.entry_type === "SKILL_SESSION" && !entry.skill_id);
-  const [open, setOpen] = useState(entry.provenance === "agent_inferred" || unmatched);
+  const issues = validateProposalForSave(entry);
+  const [open, setOpen] = useState(entry.provenance === "agent_inferred" || unmatched || issues.length > 0);
   const inferred = entry.provenance === "agent_inferred";
+  const blocked = issues.length > 0;
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
@@ -51,14 +54,26 @@ export default function EntryCard({
         </button>
       </div>
 
-      {(open || unmatched) && (
+      {(open || unmatched || blocked) && (
         <FieldEditor entry={entry} habits={habits} skills={skills} onChange={onChange} />
+      )}
+
+      {blocked && (
+        <ul className="text-[11px] text-rose-300 space-y-0.5">
+          {issues.map((i) => (
+            <li key={`${i.field}:${i.message}`}>
+              {i.field === "habit_completed" && i.message === "required"
+                ? t.habitCompletedRequired
+                : t.fieldOutOfRange.replace("{field}", i.field)}
+            </li>
+          ))}
+        </ul>
       )}
 
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || blocked}
           onClick={onSave}
           className="flex-1 min-h-[44px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm disabled:opacity-40"
         >
@@ -159,13 +174,21 @@ function FieldEditor({
         </>
       )}
       {entry.entry_type === "HABIT_LOG" && (
-        <label className="flex items-center gap-2 text-sm min-h-[44px]">
-          <input
-            type="checkbox"
-            checked={entry.habit_completed !== false}
-            onChange={(e) => set({ habit_completed: e.target.checked })}
-          />
+        <label className="block text-xs text-zinc-400">
           {t.completed} ({entry.habit_name ?? t.typeHabit})
+          <select
+            className="mt-0.5 w-full min-h-[44px] rounded bg-zinc-950 border border-zinc-700 px-3 text-sm text-zinc-100"
+            value={entry.habit_completed === true ? "true" : entry.habit_completed === false ? "false" : ""}
+            onChange={(e) =>
+              set({
+                habit_completed: e.target.value === "" ? null : e.target.value === "true",
+              })
+            }
+          >
+            <option value="">{t.habitUnset}</option>
+            <option value="true">{t.habitDone}</option>
+            <option value="false">{t.habitMissed}</option>
+          </select>
         </label>
       )}
       {entry.entry_type === "SKILL_SESSION" && (

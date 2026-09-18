@@ -7,10 +7,10 @@ import { api, AuthError } from "../lib/api";
  * refetch; `enabled` already gates on a live token.
  */
 export function useSkills() {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   return useQuery({
-    queryKey: ["skills"],
-    enabled: Boolean(token),
+    queryKey: ["skills", userId],
+    enabled: Boolean(token && userId),
     queryFn: () => {
       const t = getSessionToken();
       if (!t) throw new AuthError("session expired");
@@ -20,10 +20,10 @@ export function useSkills() {
 }
 
 export function useHabits() {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   return useQuery({
-    queryKey: ["habits"],
-    enabled: Boolean(token),
+    queryKey: ["habits", userId],
+    enabled: Boolean(token && userId),
     queryFn: () => {
       const t = getSessionToken();
       if (!t) throw new AuthError("session expired");

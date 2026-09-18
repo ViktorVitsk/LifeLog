@@ -29,6 +29,8 @@ export interface LlmSettings {
   decrypt_n: number;
   /** Decrypted in memory only. */
   api_key: string;
+  /** Reserved. Always false in this stage — the model cannot enable it. */
+  auto_save_enabled?: boolean;
 }
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
@@ -38,6 +40,7 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   context_policy: "today",
   decrypt_n: 5,
   api_key: "",
+  auto_save_enabled: false,
 };
 
 export interface ProposedEntry {
@@ -45,7 +48,9 @@ export interface ProposedEntry {
   entry_type: EntryTypeName;
   confidence: number;
   provenance: Provenance;
+  /** Ignored at persist time. Reserved for a future client-side setting. */
   auto_commit?: boolean;
+  issues?: { field: string; message: string }[];
   reason?: string;
   tags?: string[];
   timestamp?: string;
@@ -124,10 +129,24 @@ export interface ThreadMessage {
   role: ChatRole;
   content: string;
   created_at: number;
+  /** User message this assistant turn is answering. */
+  source_user_turn_id?: string;
   proposals?: ProposedEntry[];
   charts?: ChartSpec[];
   committed_ids?: string[];
   tools?: { name: string; status: "running" | "done" | "error"; detail?: string }[];
+  context_audit?: {
+    policy: ContextPolicy;
+    unique_decrypted: number;
+    sent_plaintext_to_model: boolean;
+    tools: {
+      name: string;
+      entry_ids: string[];
+      decrypted_ids: string[];
+      approx_chars: number;
+      truncated: boolean;
+    }[];
+  };
 }
 
 export interface ChatCompletionMessage {

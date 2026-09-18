@@ -9,33 +9,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { db } from "../db/offlineQueue";
 import {
   api,
   AUTH_EXPIRED_EVENT,
   isAuthError,
   resetAuthExpiredGate,
 } from "../lib/api";
-import { deriveKEK, tryUnwrapDek } from "../lib/crypto";
-
-/**
- * Auth state model.
- *
- * - `token`   : JWT. Mirrored to sessionStorage so a same-tab refresh
- *               doesn't force a full login round-trip.
- * - `salt`    : User's PBKDF2 salt (NOT secret — the server returns it on
- *               login). Mirrored to sessionStorage so we can re-derive the
- *               KEK locally after a refresh, without hitting the network.
- * - `kek`     : Key-Encryption-Key. STRICTLY memory-only. A page refresh
- *               wipes it — that's by design. Use `unlock(password)` to
- *               re-derive it.
- * - `username`: mirrored for UX.
- *
- * Derived flags:
- *   isFullyAuthenticated  — have token + kek, can encrypt/decrypt
- *   needsUnlock           — have token + salt but no kek (post-refresh)
- *   sessionExpired        — JWT rejected; KEK may still be in memory
- */
+import { deriveKEK } from "../lib/crypto";
+import {
+  jwtSub,
+  setCurrentUserId,
+  setEncryptAllowed,
+} from "../lib/accountScope";
+import { establishKek, KeyUnverifiedError } from "../lib/kekUnlock";
 
 const SESSION_STORAGE_KEY = "lifelog.session";
 const REFRESH_SKEW_MS = 90_000;
@@ -44,6 +30,7 @@ interface PersistedSession {
   token: string;
   username: string;
   salt: string;
+  userId: string;
 }
 
 export interface AuthState {
@@ -51,7 +38,9 @@ export interface AuthState {
   kek: CryptoKey | null;
   username: string | null;
   salt: string | null;
+  userId: string | null;
   sessionExpired: boolean;
+  kekVerified: boolean;
 }
 
 export interface AuthContextValue extends AuthState {
@@ -61,9 +50,7 @@ export interface AuthContextValue extends AuthState {
     password: string,
     saltHex: string,
   ) => Promise<void>;
-  /** Re-derive the KEK from the in-session salt + a freshly typed password. */
   unlock: (password: string) => Promise<void>;
-  /** Get a new JWT after expiry using the master password. */
   reauthenticate: (password: string) => Promise<void>;
   logout: () => void;
   isFullyAuthenticated: boolean;
@@ -80,9 +67,22 @@ function readPersisted(): PersistedSession | null {
     if (
       typeof parsed?.token === "string" &&
       typeof parsed?.username === "string" &&
-      typeof parsed?.salt === "string"
+      typeof parsed?.salt === "string" &&
+      typeof parsed?.userId === "string" &&
+      parsed.userId
     ) {
       return parsed;
+    }
+    if (
+      typeof parsed?.token === "string" &&
+      typeof parsed?.username === "string" &&
+      typeof parsed?.salt === "string"
+    ) {
+      const userId = jwtSub(parsed.token);
+      if (!userId) return null;
+      const next = { token: parsed.token, username: parsed.username, salt: parsed.salt, userId };
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      return next;
     }
   } catch {
     /* ignore malformed session */
@@ -106,10 +106,12 @@ function clearPersisted() {
   }
 }
 
-/** Latest JWT from sessionStorage — queryFns should use this so a silent
- *  refresh is visible before React re-renders. */
 export function getSessionToken(): string | null {
   return readPersisted()?.token ?? null;
+}
+
+export function getSessionUserId(): string | null {
+  return readPersisted()?.userId ?? null;
 }
 
 function jwtExpMs(token: string): number | null {
@@ -131,18 +133,41 @@ export class WrongPasswordError extends Error {
   }
 }
 
+export { KeyUnverifiedError };
+
+async function resolveUserId(token: string): Promise<string> {
+  try {
+    const me = await api.me(token);
+    if (me?.id) return me.id;
+  } catch {
+    /* fall through to JWT */
+  }
+  const sub = jwtSub(token);
+  if (!sub) throw new Error("missing_user_id");
+  return sub;
+}
+
+function applyScope(userId: string | null, encryptOk: boolean) {
+  setCurrentUserId(userId);
+  setEncryptAllowed(encryptOk);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const recovering = useRef(false);
 
   const [state, setState] = useState<AuthState>(() => {
     const persisted = readPersisted();
+    if (persisted?.userId) setCurrentUserId(persisted.userId);
+    setEncryptAllowed(false);
     return {
       token: persisted?.token ?? null,
       kek: null,
       username: persisted?.username ?? null,
       salt: persisted?.salt ?? null,
+      userId: persisted?.userId ?? null,
       sessionExpired: false,
+      kekVerified: false,
     };
   });
 
@@ -154,26 +179,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setAuthenticated = useCallback(
     async (username: string, token: string, password: string, saltHex: string) => {
+      const userId = await resolveUserId(token);
+      applyScope(userId, false);
       const kek = await deriveKEK(password, saltHex);
+      const result = await establishKek({ kek, token, userId, allowBootstrap: true });
+      if (result === "wrong_password") throw new WrongPasswordError();
+      if (result !== "verified") throw new KeyUnverifiedError();
+      applyScope(userId, true);
       resetAuthExpiredGate();
-      writePersisted({ token, username, salt: saltHex });
-      setState({ token, kek, username, salt: saltHex, sessionExpired: false });
+      writePersisted({ token, username, salt: saltHex, userId });
+      queryClient.clear();
+      setState({
+        token,
+        kek,
+        username,
+        salt: saltHex,
+        userId,
+        sessionExpired: false,
+        kekVerified: true,
+      });
     },
-    [],
+    [queryClient],
   );
 
   const unlock = useCallback(async (password: string) => {
     const persisted = readPersisted();
     if (!persisted) throw new Error("no session to unlock");
+    applyScope(persisted.userId, false);
     const kek = await deriveKEK(password, persisted.salt);
 
-    // Best-effort verification: if Dexie has any entry, try to unwrap its
-    // DEK. A wrong password fails here cleanly instead of corrupting
-    // future submissions with an unusable KEK.
-    const sample = await db.entries.limit(1).first();
-    if (sample && !(await tryUnwrapDek(sample.encrypted_dek, kek))) {
-      throw new WrongPasswordError();
-    }
+    const result = await establishKek({
+      kek,
+      token: persisted.token,
+      userId: persisted.userId,
+      allowBootstrap: false,
+    });
+    if (result === "wrong_password") throw new WrongPasswordError();
+    if (result !== "verified") throw new KeyUnverifiedError();
 
     let token = persisted.token;
     try {
@@ -184,14 +226,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token = res.access_token;
     }
 
+    applyScope(persisted.userId, true);
     resetAuthExpiredGate();
-    writePersisted({ token, username: persisted.username, salt: persisted.salt });
+    writePersisted({ ...persisted, token });
     setState({
       token,
       username: persisted.username,
       salt: persisted.salt,
+      userId: persisted.userId,
       kek,
       sessionExpired: false,
+      kekVerified: true,
     });
   }, []);
 
@@ -199,35 +244,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const persisted = readPersisted();
     const username = persisted?.username ?? state.username;
     const salt = persisted?.salt ?? state.salt;
-    if (!username || !salt) throw new Error("no session to unlock");
+    const userId = persisted?.userId ?? state.userId;
+    if (!username || !salt || !userId) throw new Error("no session to unlock");
 
+    applyScope(userId, false);
     const kek = await deriveKEK(password, salt);
-    const sample = await db.entries.limit(1).first();
-    if (sample && !(await tryUnwrapDek(sample.encrypted_dek, kek))) {
-      throw new WrongPasswordError();
-    }
-
     const res = await api.login(username, password);
+    const result = await establishKek({
+      kek,
+      token: res.access_token,
+      userId,
+      allowBootstrap: true,
+    });
+    if (result === "wrong_password") throw new WrongPasswordError();
+    if (result !== "verified") throw new KeyUnverifiedError();
+
+    applyScope(userId, true);
     resetAuthExpiredGate();
-    writePersisted({ token: res.access_token, username, salt: res.salt || salt });
+    writePersisted({
+      token: res.access_token,
+      username,
+      salt: res.salt || salt,
+      userId,
+    });
     setState({
       token: res.access_token,
       kek,
       username,
       salt: res.salt || salt,
+      userId,
       sessionExpired: false,
+      kekVerified: true,
     });
     await queryClient.invalidateQueries();
-  }, [queryClient, state.salt, state.username]);
+  }, [queryClient, state.salt, state.username, state.userId]);
 
   const logout = useCallback(() => {
     resetAuthExpiredGate();
     clearPersisted();
+    applyScope(null, false);
     queryClient.clear();
-    setState({ token: null, kek: null, username: null, salt: null, sessionExpired: false });
+    setState({
+      token: null,
+      kek: null,
+      username: null,
+      salt: null,
+      userId: null,
+      sessionExpired: false,
+      kekVerified: false,
+    });
   }, [queryClient]);
 
   const markSessionExpired = useCallback(() => {
+    setEncryptAllowed(false);
     setState((s) => {
       if (s.sessionExpired && !s.token) return s;
       return { ...s, token: null, sessionExpired: Boolean(s.username || s.salt || s.kek) };
@@ -287,8 +356,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unlock,
       reauthenticate,
       logout,
-      isFullyAuthenticated: Boolean(state.token && state.kek && !state.sessionExpired),
-      needsUnlock: Boolean(state.token && state.salt && !state.kek && !state.sessionExpired),
+      isFullyAuthenticated: Boolean(
+        state.token && state.kek && state.kekVerified && !state.sessionExpired,
+      ),
+      needsUnlock: Boolean(
+        state.token && state.salt && (!state.kek || !state.kekVerified) && !state.sessionExpired,
+      ),
     }),
     [state, setAuthenticated, unlock, reauthenticate, logout],
   );

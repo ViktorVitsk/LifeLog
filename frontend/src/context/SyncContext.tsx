@@ -19,23 +19,27 @@ interface SyncContextValue {
 const SyncContext = createContext<SyncContextValue | null>(null);
 
 export function SyncProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   const qc = useQueryClient();
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const triggerRef = useRef<(() => void) | null>(null);
   const tokenRef = useRef(token);
   tokenRef.current = token;
-  const authed = Boolean(token);
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+  const authed = Boolean(token && userId);
 
   useEffect(() => {
     if (!authed) return;
 
     const handle = startSyncManager({
       getToken: () => tokenRef.current,
+      getUserId: () => userIdRef.current,
       onResult: (r) => {
         if (r.attempted > 0 || r.error) setLastResult(r);
         if (r.saved > 0) {
-          void qc.invalidateQueries({ queryKey: ["entries"] });
+          const uid = userIdRef.current;
+          void qc.invalidateQueries({ queryKey: uid ? ["entries", uid] : ["entries"] });
         }
       },
     });
@@ -45,7 +49,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       triggerRef.current = null;
       handle.stop();
     };
-  }, [authed, qc]);
+  }, [authed, userId, qc]);
 
   return (
     <SyncContext.Provider

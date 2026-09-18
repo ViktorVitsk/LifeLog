@@ -1,11 +1,12 @@
 import { db, type StoredLlmSettings } from "../db/offlineQueue";
 import { decryptEntry, encryptEntry } from "../lib/crypto";
+import { getCurrentUserId, requireCurrentUserId } from "../lib/accountScope";
 import { DEFAULT_LLM_SETTINGS, type LlmSettings } from "./types";
 
-const ROW_ID = "default" as const;
-
 export async function loadLlmSettings(kek: CryptoKey | null): Promise<LlmSettings> {
-  const row = await db.llm_settings.get(ROW_ID);
+  const owner = getCurrentUserId();
+  if (!owner) return { ...DEFAULT_LLM_SETTINGS };
+  const row = await db.llm_settings.get(owner);
   if (!row) return { ...DEFAULT_LLM_SETTINGS };
   let api_key = "";
   if (kek && row.encrypted_api_key && row.encrypted_api_key_dek) {
@@ -24,10 +25,12 @@ export async function loadLlmSettings(kek: CryptoKey | null): Promise<LlmSetting
     context_policy: row.context_policy,
     decrypt_n: row.decrypt_n,
     api_key,
+    auto_save_enabled: false,
   };
 }
 
 export async function saveLlmSettings(settings: LlmSettings, kek: CryptoKey): Promise<void> {
+  const owner = requireCurrentUserId();
   let encrypted_api_key: string | undefined;
   let encrypted_api_key_dek: string | undefined;
   if (settings.api_key.trim()) {
@@ -36,7 +39,8 @@ export async function saveLlmSettings(settings: LlmSettings, kek: CryptoKey): Pr
     encrypted_api_key_dek = wrapped.encryptedDek;
   }
   const row: StoredLlmSettings = {
-    id: ROW_ID,
+    id: owner,
+    owner_user_id: owner,
     provider: settings.provider,
     model: settings.model.trim() || DEFAULT_LLM_SETTINGS.model,
     base_url:

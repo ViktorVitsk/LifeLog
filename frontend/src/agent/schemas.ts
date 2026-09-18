@@ -25,7 +25,7 @@ const proposedEntryProperties: Record<string, unknown> = {
   },
   auto_commit: {
     type: "boolean",
-    description: "True only if the user explicitly asked to save this fact.",
+    description: "Ignored. The app never persists from this flag.",
   },
   reason: { type: "string" },
   tags: { type: "array", items: { type: "string" } },
@@ -88,7 +88,7 @@ const proposeEntries: ToolDef = {
   function: {
     name: "propose_entries",
     description:
-      "Propose structured log entries. For HABIT_LOG / SKILL_SESSION include habit_id or skill_id from snapshot or from create_habit/create_skill. Never invent numeric scores the user did not state.",
+      "Propose structured log entries for confirm cards. Never persist. For HABIT_LOG / SKILL_SESSION include habit_id or skill_id from the snapshot, or a name so the user can confirm creating it on Save. Never invent numeric scores the user did not state. Out-of-range numbers are rejected, not clamped.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -139,7 +139,7 @@ const searchEntries: ToolDef = {
   function: {
     name: "search_entries",
     description:
-      "Filter recent entries by type/tag/date. Decrypts at most N journal texts if policy allows.",
+      "Filter entries in the allowed context window by type/tag/date. Decrypts journal text only if policy allows and the per-run unique budget remains.",
     parameters: {
       type: "object",
       properties: {
@@ -293,14 +293,13 @@ export const CLOUD_TOOLS: ToolDef[] = [
   searchEntries,
   listSkills,
   listHabits,
-  createSkill,
-  createHabit,
-  updateHabit,
   proposeEntries,
-  commitEntries,
   showChart,
   pinChart,
 ];
+
+/** Kept for runtime validation if a model still names a write tool. Not offered to the provider. */
+export const BLOCKED_WRITE_TOOL_DEFS: ToolDef[] = [createSkill, createHabit, updateHabit, commitEntries];
 
 export function toolsForProvider(provider: "openrouter" | "ollama"): ToolDef[] {
   return provider === "ollama" ? LOCAL_TOOLS : CLOUD_TOOLS;

@@ -7,8 +7,10 @@
  *   encrypted_content = AES-256-GCM(plaintext_json, DEK)
  *   encrypted_dek     = AES-256-GCM(DEK_raw_bytes, KEK)
  *
- * The server receives only { encrypted_content, encrypted_dek } + open numeric metadata.
- * It can never read diary content.
+ * The server stores ciphertext plus open numeric metadata. A stolen database
+ * without the password does not reveal diary text. The login password is still
+ * sent to the auth server, so this is hybrid encryption, not "the server can
+ * never read the diary."
  */
 
 const PBKDF2_ITERATIONS = 100_000;
@@ -209,4 +211,30 @@ export async function decryptEntry(
   );
 
   return new TextDecoder().decode(plaintextBytes);
+}
+
+export const KEK_VERIFIER_PAYLOAD = "lifelog-kek-verifier-v1";
+
+export async function wrapKekVerifier(
+  kek: CryptoKey,
+): Promise<{ encrypted_content: string; encrypted_dek: string }> {
+  const { encryptedContent, encryptedDek } = await encryptEntry(
+    JSON.stringify({ v: 1, kind: "kek_verifier", payload: KEK_VERIFIER_PAYLOAD }),
+    kek,
+  );
+  return { encrypted_content: encryptedContent, encrypted_dek: encryptedDek };
+}
+
+export async function checkKekVerifier(
+  encryptedContent: string,
+  encryptedDek: string,
+  kek: CryptoKey,
+): Promise<boolean> {
+  try {
+    const raw = await decryptEntry(encryptedContent, encryptedDek, kek);
+    const parsed = JSON.parse(raw) as { payload?: string };
+    return parsed.payload === KEK_VERIFIER_PAYLOAD;
+  } catch {
+    return false;
+  }
 }

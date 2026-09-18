@@ -19,3 +19,49 @@ class EntryType(StrEnum):
 class HabitFrequency(StrEnum):
     DAILY = "daily"
     WEEKLY = "weekly"
+
+
+class GoalState(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    DROPPED = "dropped"
+
+
+class MemoryKind(StrEnum):
+    PREFERENCE = "preference"
+    CONTEXT = "context"
+    OBSERVED_PATTERN = "observed_pattern"
+    HYPOTHESIS = "hypothesis"
+
+
+class MemoryState(StrEnum):
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    DISPUTED = "disputed"
+    STALE = "stale"
+
+
+class MemoryOrigin(StrEnum):
+    USER = "user"
+    AGENT = "agent"
+    IMPORT = "import"
+
+
+class ActionState(StrEnum):
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    STOPPED = "stopped"
+
+
+class FeedbackOutcome(StrEnum):
+    NOT_TRIED = "not_tried"
+    NOT_SUITABLE = "not_suitable"
+    TRIED_NO_EFFECT = "tried_no_effect"
+    TRIED_HELPED = "tried_helped"
+    TRIED_HURT = "tried_hurt"
+    OTHER = "other"

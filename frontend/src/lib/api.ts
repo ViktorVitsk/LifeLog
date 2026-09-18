@@ -77,6 +77,7 @@ export interface EntrySyncPayload {
   skill_id?: string | null;
   habit_id?: string | null;
   context_id?: string | null;
+  goal_id?: string | null;
   tags: string[];
   mood_score?: number | null;
   energy_score?: number | null;
@@ -488,4 +489,107 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+
+  async getLife(token: string): Promise<LifeBundle> {
+    return request("/api/life", { token });
+  },
+
+  async syncLifeGoals(token: string, items: LifeGoalSync[]): Promise<LifeSyncResponse> {
+    return request("/api/life/goals/sync", { method: "POST", token, body: JSON.stringify({ items }) });
+  },
+
+  async syncLifeMemory(token: string, items: LifeMemorySync[]): Promise<LifeSyncResponse> {
+    return request("/api/life/memory/sync", { method: "POST", token, body: JSON.stringify({ items }) });
+  },
+
+  async syncLifeActions(token: string, items: LifeActionSync[]): Promise<LifeSyncResponse> {
+    return request("/api/life/actions/sync", { method: "POST", token, body: JSON.stringify({ items }) });
+  },
+
+  async syncLifeFeedback(token: string, items: LifeFeedbackSync[]): Promise<LifeSyncResponse> {
+    return request("/api/life/feedback/sync", { method: "POST", token, body: JSON.stringify({ items }) });
+  },
 };
+
+export interface LifeSyncResponse {
+  results: { id: string; status: string; reason?: string | null; version?: number | null }[];
+  saved: string[];
+}
+
+export interface LifeGoalSync {
+  id: string;
+  state: string;
+  review_at?: string | null;
+  habit_ids?: string[];
+  skill_ids?: string[];
+  entry_ids?: string[];
+  encrypted_dek: string;
+  encrypted_content: string;
+  version?: number;
+  deleted?: boolean;
+}
+
+export interface LifeMemorySync {
+  id: string;
+  kind: string;
+  state: string;
+  origin?: string;
+  reviewed_at?: string | null;
+  entry_ids?: string[];
+  encrypted_dek: string;
+  encrypted_content: string;
+  version?: number;
+  deleted?: boolean;
+}
+
+export interface LifeActionSync {
+  id: string;
+  goal_id: string;
+  state: string;
+  result_metric?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  review_at?: string | null;
+  encrypted_dek: string;
+  encrypted_content: string;
+  version?: number;
+  deleted?: boolean;
+}
+
+export interface LifeFeedbackSync {
+  id: string;
+  action_id: string;
+  outcome_kind: string;
+  encrypted_dek: string;
+  encrypted_content: string;
+  version?: number;
+  deleted?: boolean;
+}
+
+export interface LifeGoalRead extends LifeGoalSync {
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LifeMemoryRead extends LifeMemorySync {
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LifeActionRead extends LifeActionSync {
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LifeFeedbackRead extends LifeFeedbackSync {
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LifeBundle {
+  goals: LifeGoalRead[];
+  memory: LifeMemoryRead[];
+  actions: LifeActionRead[];
+  feedback: LifeFeedbackRead[];
+  due_action_ids: string[];
+}

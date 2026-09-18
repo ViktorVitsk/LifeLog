@@ -175,6 +175,7 @@ def validate_refs(
     owned_skill_ids: set[UUID],
     owned_habit_ids: set[UUID],
     owned_context_ids: set[UUID],
+    owned_goal_ids: set[UUID] | None = None,
 ) -> str | None:
     skill_id = data.get("skill_id")
     if skill_id is not None:
@@ -199,6 +200,14 @@ def validate_refs(
                 return "unknown_context"
         except (TypeError, ValueError):
             return "unknown_context"
+
+    goal_id = data.get("goal_id")
+    if goal_id is not None:
+        try:
+            if owned_goal_ids is None or _as_uuid(goal_id) not in owned_goal_ids:
+                return "unknown_goal"
+        except (TypeError, ValueError):
+            return "unknown_goal"
 
     return None
 
@@ -231,6 +240,7 @@ def decide_sync_item(
     owned_skill_ids: set[UUID],
     owned_habit_ids: set[UUID],
     owned_context_ids: set[UUID],
+    owned_goal_ids: set[UUID] | None = None,
 ) -> tuple[str, str | None]:
     """
     Return (status, reason).
@@ -267,6 +277,7 @@ def decide_sync_item(
         owned_skill_ids=owned_skill_ids,
         owned_habit_ids=owned_habit_ids,
         owned_context_ids=owned_context_ids,
+        owned_goal_ids=owned_goal_ids,
     )
     if reason:
         return SyncStatus.REJECTED, reason

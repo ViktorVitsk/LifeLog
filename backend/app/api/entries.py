@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.enums import EntryType
-from app.models import ContextTag, Entry, Habit, Skill, User
+from app.models import ContextTag, Entry, Goal, Habit, Skill, User
 from app.schemas.entry import (
     EntryRead,
     EntrySyncItem,
@@ -34,6 +34,7 @@ def _entry_as_dict(row: Entry) -> dict:
         "skill_id": row.skill_id,
         "habit_id": row.habit_id,
         "context_id": row.context_id,
+        "goal_id": row.goal_id,
         "tags": row.tags,
         "mood_score": row.mood_score,
         "energy_score": row.energy_score,
@@ -71,6 +72,7 @@ def _row_values(item: EntrySyncItem, user_id: UUID, account_tz: str) -> dict:
         "skill_id": item.skill_id,
         "habit_id": item.habit_id,
         "context_id": item.context_id,
+        "goal_id": item.goal_id,
         "tags": item.tags,
         "mood_score": item.mood_score,
         "energy_score": item.energy_score,
@@ -134,6 +136,11 @@ async def sync_entries(
     owned_contexts = set(
         (await db.execute(select(ContextTag.id).where(ContextTag.user_id == user_id))).scalars().all()
     )
+    owned_goals = set(
+        (
+            await db.execute(select(Goal.id).where(Goal.user_id == user_id, Goal.deleted_at.is_(None)))
+        ).scalars().all()
+    )
 
     results: list[SyncItemResult] = []
     created = duplicate = conflict = rejected = deleted = 0
@@ -147,6 +154,7 @@ async def sync_entries(
             owned_skill_ids=owned_skills,
             owned_habit_ids=owned_habits,
             owned_context_ids=owned_contexts,
+            owned_goal_ids=owned_goals,
         )
         if status_name == "deleted":
             stored = existing_by_id.get(item.id)
@@ -197,6 +205,7 @@ async def sync_entries(
                 owned_skill_ids=owned_skills,
                 owned_habit_ids=owned_habits,
                 owned_context_ids=owned_contexts,
+                owned_goal_ids=owned_goals,
             )
             if status_name == "created":
                 status_name, reason = "rejected", "persist_failed"

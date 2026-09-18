@@ -11,6 +11,7 @@ import DashboardPage from "./pages/DashboardPage";
 import HabitsPage from "./pages/HabitsPage";
 import InsightsPage from "./pages/InsightsPage";
 import JournalPage from "./pages/JournalPage";
+import LifePage from "./pages/LifePage";
 import LoginPage from "./pages/LoginPage";
 import PsychologyPage from "./pages/PsychologyPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -56,6 +57,7 @@ export default function App() {
                 <Route path="skills" element={<SkillsPage />} />
                 <Route path="habits" element={<HabitsPage />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
+              <Route path="life" element={<LifePage />} />
               </Route>
               <Route path="/checkin" element={<CheckinPage />} />
               <Route path="/settings" element={<SettingsPage />} />

@@ -17,6 +17,7 @@ class EntryBase(BaseModel):
     skill_id: UUID | None = None
     habit_id: UUID | None = None
     context_id: UUID | None = None
+    goal_id: UUID | None = None
 
     tags: list[str] = Field(default_factory=list)
 
@@ -58,6 +59,7 @@ class EntrySyncItem(BaseModel):
     skill_id: UUID | None = None
     habit_id: UUID | None = None
     context_id: UUID | None = None
+    goal_id: UUID | None = None
     tags: list[str] = Field(default_factory=list)
     mood_score: int | None = None
     energy_score: int | None = None

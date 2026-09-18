@@ -8,7 +8,17 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.core.database import Base
-from app.models import ContextTag, Entry, Habit, Skill, User  # noqa: F401  (register metadata)
+from app.models import (  # noqa: F401  (register metadata)
+    ActionFeedback,
+    ContextTag,
+    Entry,
+    Goal,
+    Habit,
+    MemoryItem,
+    PlannedAction,
+    Skill,
+    User,
+)
 
 config = context.config
 

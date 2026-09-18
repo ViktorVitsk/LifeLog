@@ -7,6 +7,7 @@ import {
   markSynced,
 } from "../db/offlineQueue";
 import { api, isAuthError, isNetworkError, type EntrySyncPayload } from "../lib/api";
+import { flushLifeQueue } from "../lib/lifeStore";
 import { planQueueUpdates } from "./syncContract.ts";
 
 /**
@@ -127,7 +128,8 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
     if (!token || !userId) return;
     inFlight = (async () => {
       const r = await runSyncOnce(token, userId);
-      onResult?.(r);
+      const lifeSaved = await flushLifeQueue(token, userId).catch(() => 0);
+      onResult?.(lifeSaved ? { ...r, saved: r.saved + lifeSaved } : r);
     })().finally(() => {
       inFlight = null;
     });

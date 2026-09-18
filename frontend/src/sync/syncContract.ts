@@ -59,7 +59,7 @@ export function planQueueUpdates(
     if (tombstones.has(id) && (status === "created" || status === "duplicate")) {
       return;
     }
-    if (status === "created" || status === "duplicate") {
+    if (status === "created" || status === "duplicate" || status === "updated") {
       markSynced.push(id);
       return;
     }

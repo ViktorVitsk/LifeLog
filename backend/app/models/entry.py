@@ -67,6 +67,12 @@ class Entry(Base):
         ForeignKey("context_tags.id", ondelete="SET NULL"),
         nullable=True,
     )
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("goals.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     tags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
 

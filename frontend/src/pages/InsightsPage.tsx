@@ -9,6 +9,7 @@ export default function InsightsPage() {
     { to: "/insights/skills", label: t.insightSkills },
     { to: "/insights/habits", label: t.insightHabits },
     { to: "/insights/analytics", label: t.insightAnalytics },
+    { to: "/insights/life", label: t.insightLife },
   ];
 
   return (

@@ -48,12 +48,25 @@ export interface StoredKekVerifier {
   created_at: number;
 }
 
+export type LifeKind = "goal" | "memory" | "action" | "feedback";
+
+export interface PendingLife {
+  id: string;
+  kind: LifeKind;
+  payload: Record<string, unknown>;
+  status: QueueStatus;
+  owner_user_id: string;
+  queued_at: number;
+  last_error?: string;
+}
+
 export class LifeLogDB extends Dexie {
   entries!: EntityTable<PendingEntry, "id">;
   chat_turns!: EntityTable<StoredChatTurn, "id">;
   llm_settings!: EntityTable<StoredLlmSettings, "id">;
   pinned_charts!: EntityTable<StoredPinnedChart, "id">;
   kek_verifiers!: EntityTable<StoredKekVerifier, "owner_user_id">;
+  life_queue!: EntityTable<PendingLife, "id">;
 
   constructor() {
     super("lifelog");
@@ -75,6 +88,14 @@ export class LifeLogDB extends Dexie {
       llm_settings: "id",
       pinned_charts: "id, created_at, owner_user_id",
       kek_verifiers: "owner_user_id",
+    });
+    this.version(5).stores({
+      entries: "id, status, entry_type, timestamp, queued_at, skill_id, habit_id, owner_user_id",
+      chat_turns: "id, day, created_at, owner_user_id",
+      llm_settings: "id",
+      pinned_charts: "id, created_at, owner_user_id",
+      kek_verifiers: "owner_user_id",
+      life_queue: "id, kind, status, owner_user_id, queued_at",
     });
   }
 }

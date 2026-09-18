@@ -40,6 +40,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         if (r.saved > 0 || (r.deleted ?? 0) > 0) {
           const uid = userIdRef.current;
           void qc.invalidateQueries({ queryKey: uid ? ["entries", uid] : ["entries"] });
+          void qc.invalidateQueries({ queryKey: uid ? ["life", uid] : ["life"] });
         }
       },
     });

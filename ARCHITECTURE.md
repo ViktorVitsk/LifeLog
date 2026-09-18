@@ -580,5 +580,43 @@ Tabs over Dashboard, Psychology, Skills, Habits, Analytics (open-metric graphs u
 
 ---
 
+## 14. Goals, memory, and actions (Stage C)
+
+`entries` stay the observation history. Goals, memory items, and planned actions are **separate encrypted entities**. They sync like entries (ciphertext + open state). There is no generic `linked_type + linked_id`.
+
+### Goals (`goals`)
+
+Open: `id`, `user_id`, `state` (`draft|active|paused|completed|dropped`), `version`, `review_at`, `created_at`, `updated_at`, `deleted_at`.
+
+Encrypted JSON: `title`, `why`, `enough_result`, `baseline`, `constraints`, `next_step`, `values` (list of strings; no values catalog yet).
+
+Explicit links (owner checked on both sides):
+
+- `goal_habit_links (goal_id, habit_id, user_id)`
+- `goal_skill_links (goal_id, skill_id, user_id)`
+- `goal_entry_links (goal_id, entry_id, user_id)`
+
+`entries.goal_id` is set on `GOAL_UPDATE` so progress forms a history of the same goal.
+
+### Memory (`memory_items`)
+
+Open: `kind` (`preference|context|observed_pattern|hypothesis`), `state` (`proposed|accepted|disputed|stale`), `origin` (`user|agent|import`), `version`, `created_at`, `reviewed_at`, `deleted_at`.
+
+Encrypted JSON: `statement`, `sensitive_grounds`.
+
+`memory_entry_links` points at the source entries. User accept/dispute/delete is a state change, not scientific proof. The model profile is **assembled** from `accepted` items and is rebuildable.
+
+### Actions (`planned_actions`) + `action_feedback`
+
+Open on an action: `goal_id`, `state` (`proposed|accepted|rejected|active|completed|stopped`), `result_metric` (open metric key, optional), `period_start`, `period_end`, `review_at`, `version`.
+
+Encrypted JSON: `proposal`, `grounds`, `chosen_try`.
+
+Feedback is a separate row: open `outcome_kind` (`not_tried|not_suitable|tried_no_effect|tried_helped|tried_hurt|other`); encrypted `difficulty`, `usefulness`, `what_changed`, `side_effects`, `continue_notes`. Not a single 1–5 score.
+
+Long-term memory is not browser-only: these tables sync to the server as ciphertext.
+
+---
+
 *When starting, paste this file and say:*
 **"Read ARCHITECTURE.md carefully. Confirm you understood the 5 points from the top. Then propose your implementation plan for Phase 1 only. Wait for my approval."**

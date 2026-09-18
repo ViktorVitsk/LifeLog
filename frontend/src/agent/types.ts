@@ -19,6 +19,15 @@ export type Provenance = "user_stated" | "agent_extracted" | "agent_inferred";
 
 export type ContextPolicy = "today" | "7d_open" | "decrypt_n";
 
+export type ChatMode = "record" | "analyze" | "review";
+
+export interface LifeProposal {
+  id: string;
+  kind: "memory" | "action";
+  title: string;
+  body: Record<string, unknown>;
+}
+
 export type LlmProviderId = "openrouter" | "ollama";
 
 export interface LlmSettings {
@@ -132,6 +141,7 @@ export interface ThreadMessage {
   /** User message this assistant turn is answering. */
   source_user_turn_id?: string;
   proposals?: ProposedEntry[];
+  life_proposals?: LifeProposal[];
   charts?: ChartSpec[];
   committed_ids?: string[];
   tools?: { name: string; status: "running" | "done" | "error"; detail?: string }[];

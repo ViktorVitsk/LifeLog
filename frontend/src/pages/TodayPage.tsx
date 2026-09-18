@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listPinnedCharts, loadThreadForDay, saveThreadMessage } from "../agent/chatStore";
 import { commitProposedEntry } from "../agent/commit";
@@ -10,6 +10,7 @@ import { loadLlmSettings } from "../agent/settingsStore";
 import type {
   ChartSpec,
   ChatCompletionMessage,
+  ChatMode,
   LlmSettings,
   ProposedEntry,
   ThreadMessage,
@@ -30,6 +31,7 @@ import { useEntries } from "../hooks/useEntries";
 import { useIsMdUp } from "../hooks/useIsMdUp";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { api } from "../lib/api";
+import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
 
 export default function TodayPage() {
   const { kek, token, userId } = useAuth();
@@ -43,6 +45,11 @@ export default function TodayPage() {
 
   const skillsQ = useSkills();
   const habitsQ = useHabits();
+  const lifeQ = useQuery({
+    queryKey: ["life", userId],
+    enabled: Boolean(token && userId),
+    queryFn: () => api.getLife(token!),
+  });
 
   const [settings, setSettings] = useState<LlmSettings>({ ...DEFAULT_LLM_SETTINGS });
   const [thread, setThread] = useState<ThreadMessage[]>([]);
@@ -52,6 +59,7 @@ export default function TodayPage() {
   const [tools, setTools] = useState<ThreadMessage["tools"]>([]);
   const [undo, setUndo] = useState<{ ids: string[]; until: number } | null>(null);
   const [pinned, setPinned] = useState<ChartSpec[]>([]);
+  const [mode, setMode] = useState<ChatMode>("record");
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const threadRef = useRef<ThreadMessage[]>([]);
@@ -163,6 +171,9 @@ export default function TodayPage() {
         audit: [],
         provider: settings.provider,
       },
+      mode,
+      dueActionIds: lifeQ.data?.due_action_ids ?? [],
+      knownIds: new Set((lifeQ.data?.goals ?? []).map((g) => g.id)),
     };
 
     setBusy(true);
@@ -174,6 +185,7 @@ export default function TodayPage() {
         locale,
         history,
         userText: trimmed,
+        mode,
         rt,
         signal: ac.signal,
         onDelta: (d) => setDraft((s) => s + d),
@@ -203,6 +215,7 @@ export default function TodayPage() {
         created_at: Date.now(),
         source_user_turn_id: userMsg.id,
         proposals: result.proposals,
+        life_proposals: result.lifeProposals,
         charts: result.charts,
         committed_ids: [],
         tools: result.tools,
@@ -301,6 +314,48 @@ export default function TodayPage() {
     }
   }
 
+  async function acceptLifeProposal(msgId: string, cardId: string) {
+    if (!kek || !token || !userId) return;
+    const host = threadRef.current.find((m) => m.id === msgId);
+    const card = host?.life_proposals?.find((item) => item.id === cardId);
+    if (!card) return;
+    if (card.kind === "memory") {
+      const blob = await encryptLifePayload(kek, {
+        statement: card.body.statement,
+        sensitive_grounds: card.body.grounds ?? "",
+      });
+      await enqueueLife("memory", {
+        id: card.id,
+        kind: card.body.kind ?? "hypothesis",
+        state: "accepted",
+        origin: "agent",
+        entry_ids: card.body.entry_ids ?? [],
+        reviewed_at: new Date().toISOString(),
+        ...blob,
+      });
+    } else {
+      const blob = await encryptLifePayload(kek, {
+        proposal: card.body.proposal,
+        grounds: card.body.grounds ?? "",
+        chosen_try: card.body.proposal,
+      });
+      await enqueueLife("action", {
+        id: card.id,
+        goal_id: card.body.goal_id,
+        state: "accepted",
+        result_metric: card.body.result_metric ?? null,
+        ...blob,
+      });
+    }
+    await flushLifeQueue(token, userId);
+    rewriteMessage(msgId, (m) => ({
+      ...m,
+      life_proposals: (m.life_proposals ?? []).filter((item) => item.id !== cardId),
+    }));
+    await persistLatest(msgId);
+    await qc.invalidateQueries({ queryKey: ["life", userId] });
+  }
+
   async function dismissProposal(msgId: string, id: string) {
     rewriteMessage(msgId, (m) => ({
       ...m,
@@ -323,6 +378,27 @@ export default function TodayPage() {
     <div className="flex flex-col h-full min-h-0">
       <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 space-y-4">
         <Briefing entries={entries} skills={skills} habits={habits} pinned={pinned} />
+
+        {(lifeQ.data?.due_action_ids?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-amber-800 bg-amber-950/30 text-amber-100 text-sm p-3">
+            {t.dueActionReminder.replace("{n}", String(lifeQ.data?.due_action_ids.length ?? 0))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-1">
+          {(["record", "analyze", "review"] as ChatMode[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setMode(item)}
+              className={`min-h-[36px] px-3 rounded-full text-xs border ${
+                mode === item ? "bg-indigo-600 border-indigo-500 text-white" : "border-zinc-700 text-zinc-300"
+              }`}
+            >
+              {item === "record" ? t.modeRecord : item === "analyze" ? t.modeAnalyze : t.modeReview}
+            </button>
+          ))}
+        </div>
 
         {needsSetup && (
           <div className="rounded-lg border border-amber-800 bg-amber-950/30 text-amber-100 text-sm p-3">
@@ -364,6 +440,19 @@ export default function TodayPage() {
                 onSave={() => void saveProposal(m.id, p)}
                 onDismiss={() => void dismissProposal(m.id, p.id)}
               />
+            ))}
+            {(m.life_proposals ?? []).map((card) => (
+              <div key={card.id} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
+                <div className="text-xs text-zinc-400">{card.kind}</div>
+                <div className="text-sm">{card.title}</div>
+                <button
+                  type="button"
+                  className="min-h-[36px] px-3 rounded bg-indigo-600 text-xs"
+                  onClick={() => void acceptLifeProposal(m.id, card.id)}
+                >
+                  {t.lifeAccept}
+                </button>
+              </div>
             ))}
           </div>
         ))}

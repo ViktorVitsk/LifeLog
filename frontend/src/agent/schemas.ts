@@ -215,6 +215,46 @@ const listSkills: ToolDef = {
   },
 };
 
+const proposeMemory: ToolDef = {
+  type: "function",
+  function: {
+    name: "propose_memory",
+    description:
+      "Propose a memory item card. Not persisted. User accept is agreement with the wording, not scientific proof.",
+    parameters: {
+      type: "object",
+      required: ["kind", "statement"],
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["preference", "context", "observed_pattern", "hypothesis"],
+        },
+        statement: { type: "string" },
+        grounds: { type: "string" },
+        entry_ids: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+};
+
+const proposeAction: ToolDef = {
+  type: "function",
+  function: {
+    name: "propose_action",
+    description: "Propose a small experiment card linked to a goal. Not persisted until the user accepts.",
+    parameters: {
+      type: "object",
+      required: ["goal_id", "proposal"],
+      properties: {
+        goal_id: { type: "string" },
+        proposal: { type: "string" },
+        grounds: { type: "string" },
+        result_metric: { type: "string" },
+      },
+    },
+  },
+};
+
 const listHabits: ToolDef = {
   type: "function",
   function: {
@@ -286,6 +326,8 @@ export const LOCAL_TOOLS: ToolDef[] = [
   proposeEntries,
   showChart,
   searchEntries,
+  proposeMemory,
+  proposeAction,
 ];
 
 export const CLOUD_TOOLS: ToolDef[] = [
@@ -296,6 +338,8 @@ export const CLOUD_TOOLS: ToolDef[] = [
   proposeEntries,
   showChart,
   pinChart,
+  proposeMemory,
+  proposeAction,
 ];
 
 /** Kept for runtime validation if a model still names a write tool. Not offered to the provider. */

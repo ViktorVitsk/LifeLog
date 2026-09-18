@@ -161,6 +161,24 @@ const TOOL_SCHEMAS: Record<string, JsonSchema> = {
     additionalProperties: true,
     properties: { id: { type: "string" } },
   },
+  propose_memory: {
+    type: "object",
+    required: ["kind", "statement"],
+    additionalProperties: true,
+    properties: {
+      kind: { type: "string" },
+      statement: { type: "string" },
+    },
+  },
+  propose_action: {
+    type: "object",
+    required: ["goal_id", "proposal"],
+    additionalProperties: true,
+    properties: {
+      goal_id: { type: "string" },
+      proposal: { type: "string" },
+    },
+  },
 };
 
 export function validateToolArgs(

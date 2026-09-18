@@ -20,7 +20,7 @@ Living document. A stage is not done just because files exist — behaviour chec
 | B4 Aggregation | checked (unit + live API) | Catalog, SUM vs AVG, n/coverage, chosen pairs + lag |
 | B5 Schema / export | checked (unit + live API) | CHECK 1–10, habit index, paged export + decrypt report |
 | C Goals / memory / actions | checked (unit + live API) | Encrypted goals/memory/actions, owner-checked links |
-| D Chat modes | not started | Next |
+| D Chat modes | checked (unit) | Record / Analyze / Review, allowlists, cite filter, due reminder |
 
 ## Environment (this session)
 
@@ -54,6 +54,7 @@ Living document. A stage is not done just because files exist — behaviour chec
 12. **B4:** Each open metric has scale, unit, range, aggregation, required filters, and missing=`skip`. Session minutes are summed per day; mood is averaged with `n`. `habit_value` / `habit_completed` require `habit_id` so habits are not mixed. Trends/correlations return period, observations, day coverage. Comparisons are user-chosen pairs plus an optional lag. Joint n < 3 is `insufficient` with empty points — not a hidden correlation. No nightly rollups.
 13. **B5:** Scores are 1–10 in UI, API, and CHECK constraints. Alembic `0007` refuses to apply if existing rows are out of range — it does not clamp. Partial indexes `(user_id, habit_id, timestamp)` and `(user_id, skill_id, timestamp)` cover habit/skill history. Metadata export is a page with `next_offset` / `total`. Full export walks every list page and writes `report.decrypt_errors`.
 14. **C:** Goals, memory items, planned actions, and feedback are separate encrypted tables. Links are explicit and owner-checked. `GOAL_UPDATE` may set `entries.goal_id`. Accepting memory is user agreement with the wording, not proof. The model profile is assembled from accepted items and is rebuildable. Feedback uses `outcome_kind`, not a single 1–5 score.
+15. **D:** Chat modes Record / Analyze / Review use one model and different tool allowlists. The model cannot add tools. Record allows free text without every scale and at most one question. Analyze may propose memory/actions as cards. Review gets a deterministic briefing first. Unknown UUIDs are stripped before display. Due actions show a reminder on open; no push. No invented helplines.
 
 ## Future split of auth vs encryption (A5)
 
@@ -72,7 +73,7 @@ cd frontend && npx tsc --noEmit
 npm test
 ```
 
-31 tests, 0 failed (previous + C memory profile).
+36 tests, 0 failed (previous + D modes).
 
 Backend unit:
 
@@ -104,8 +105,9 @@ Not run: Cursor browser UI, OpenRouter/Ollama, `docker compose` backend/frontend
 - Undo UI was not clicked in a browser; behaviour is covered by unit + live API.
 - Charts under `today` policy still use the 7d open-metrics API enum (no 1-day period).
 - Old LLM settings row `id=default` is not auto-attached; re-save agent settings per account.
-- Chat modes (D) are out of this pass.
+- Cursor browser UI still not run (Docker file sharing + root `node_modules`).
+- OpenRouter/Ollama were not called; D mode behaviour is covered by unit tests.
 
 ## Next
 
-D: Record / Analyze / Review modes, tool allowlists, free text without forced scales, deterministic review briefing, cite-only real ids, action review reminder.
+Plan A–D is implemented on this branch. Remaining: UI run after `node_modules` is writable, then optional polish.

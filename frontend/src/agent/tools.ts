@@ -21,7 +21,8 @@ import {
 import { isModelWriteTool, modelWriteBlockedResult } from "./persistPolicy";
 import { parseJsonObject, validateToolArgs } from "./toolArgs";
 import { buildTodaySnapshot } from "./snapshot";
-import type { ChartPeriod, ChartSpec, LlmSettings, ProposedEntry } from "./types";
+import { isToolAllowed, type ChatMode } from "./modes";
+import type { ChartPeriod, ChartSpec, LifeProposal, LlmSettings, ProposedEntry } from "./types";
 import type { AppLocale } from "../i18n/locale";
 
 export interface ToolRuntime {
@@ -37,6 +38,11 @@ export interface ToolRuntime {
   charts: ChartSpec[];
   envelope: ContextEnvelope;
   budget: ContextBudget;
+  mode?: ChatMode;
+  allowedTools?: Set<string>;
+  knownIds?: Set<string>;
+  dueActionIds?: string[];
+  lifeProposals?: LifeProposal[];
 }
 
 function asChartSpec(args: Record<string, unknown>, envelope: ContextEnvelope): ChartSpec {
@@ -87,6 +93,9 @@ export async function executeTool(
 ): Promise<unknown> {
   if (isModelWriteTool(name)) {
     return modelWriteBlockedResult(name);
+  }
+  if (rt.mode && !isToolAllowed(rt.mode, name)) {
+    return { error: "tool_not_allowed", tool: name };
   }
 
   const parsed = parseJsonObject(rawArgs.trim() ? rawArgs : "{}");
@@ -235,6 +244,48 @@ export async function executeTool(
         packed.truncated,
       );
       return packed.truncated ? JSON.parse(packed.json) : payload;
+    }
+    case "propose_memory": {
+      const known = rt.knownIds ?? new Set<string>();
+      const entryIds = Array.isArray(args.entry_ids)
+        ? args.entry_ids.filter((id): id is string => typeof id === "string" && known.has(id))
+        : [];
+      const card: LifeProposal = {
+        id: crypto.randomUUID(),
+        kind: "memory",
+        title: typeof args.statement === "string" ? args.statement : "memory",
+        body: {
+          kind: args.kind,
+          statement: args.statement,
+          grounds: args.grounds,
+          entry_ids: entryIds,
+        },
+      };
+      rt.lifeProposals = [...(rt.lifeProposals ?? []), card];
+      return {
+        proposed: card,
+        hint: "Card only. Persistence waits for the user. Accepting is agreement with the wording, not proof.",
+      };
+    }
+    case "propose_action": {
+      const known = rt.knownIds ?? new Set<string>();
+      const goalId = typeof args.goal_id === "string" && known.has(args.goal_id) ? args.goal_id : null;
+      if (!goalId) {
+        return { error: "unknown_goal", hint: "Cite a real goal id from the snapshot." };
+      }
+      const card: LifeProposal = {
+        id: crypto.randomUUID(),
+        kind: "action",
+        title: typeof args.proposal === "string" ? args.proposal : "action",
+        body: {
+          goal_id: goalId,
+          proposal: args.proposal,
+          grounds: args.grounds,
+          result_metric: args.result_metric,
+        },
+      };
+      rt.lifeProposals = [...(rt.lifeProposals ?? []), card];
+      return { proposed: card, hint: "Card only. Persistence waits for the user." };
     }
     default:
       return { error: `Unknown tool ${name}` };

@@ -14,6 +14,17 @@ interface Props {
 const MIN_H = 96;
 const MAX_H = 240;
 
+/** Swap a chip template; keep anything the user typed after it (or leave free text alone). */
+function applyChipPrompt(prev: string, nextPrompt: string, prompts: string[]): string {
+  const known = [...new Set(prompts.filter((p) => p.length > 0))].sort(
+    (a, b) => b.length - a.length,
+  );
+  const match = known.find((p) => prev.startsWith(p));
+  if (match) return nextPrompt + prev.slice(match.length);
+  if (!prev.trim()) return nextPrompt;
+  return prev;
+}
+
 function autosize(el: HTMLTextAreaElement | null) {
   if (!el) return;
   el.style.height = "0px";
@@ -43,6 +54,11 @@ export default function Composer({
     { id: "habit", label: t.chipHabit, prompt: t.promptHabit },
     { id: "thought", label: t.chipThought, prompt: t.promptThought },
   ];
+  const prompts = chips.map((c) => c.prompt);
+  const activeChipId = [...chips]
+    .filter((c) => c.prompt.length > 0)
+    .sort((a, b) => b.prompt.length - a.prompt.length)
+    .find((c) => text.startsWith(c.prompt))?.id;
 
   function send() {
     const next = text.trim();
@@ -71,9 +87,13 @@ export default function Composer({
           <button
             key={c.id}
             type="button"
-            className="shrink-0 min-h-[36px] px-3 rounded-full border border-zinc-700 text-xs text-zinc-300"
+            className={`shrink-0 min-h-[36px] px-3 rounded-full border text-xs ${
+              activeChipId === c.id
+                ? "border-indigo-500 bg-indigo-950/70 text-indigo-100"
+                : "border-zinc-700 text-zinc-300"
+            }`}
             onClick={() => {
-              setText((prev) => (prev ? prev : c.prompt));
+              setText((prev) => applyChipPrompt(prev, c.prompt, prompts));
               requestAnimationFrame(() => taRef.current?.focus());
             }}
           >

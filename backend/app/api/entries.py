@@ -1,20 +1,97 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.enums import EntryType
-from app.models import Entry, User
-from app.schemas.entry import EntryRead, EntrySyncRequest, EntrySyncResponse
+from app.models import ContextTag, Entry, Habit, Skill, User
+from app.schemas.entry import (
+    EntryRead,
+    EntrySyncItem,
+    EntrySyncRequest,
+    EntrySyncResponse,
+    SyncItemResult,
+)
+from app.services.sync_contract import decide_sync_item
 
 router = APIRouter(prefix="/api/entries", tags=["entries"])
 logger = logging.getLogger(__name__)
+
+
+def _entry_as_dict(row: Entry) -> dict:
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "timestamp": row.timestamp,
+        "entry_type": row.entry_type,
+        "skill_id": row.skill_id,
+        "habit_id": row.habit_id,
+        "context_id": row.context_id,
+        "tags": row.tags,
+        "mood_score": row.mood_score,
+        "energy_score": row.energy_score,
+        "anxiety_score": row.anxiety_score,
+        "focus_score": row.focus_score,
+        "social_battery_score": row.social_battery_score,
+        "stress_score": row.stress_score,
+        "sleep_hours": row.sleep_hours,
+        "sleep_quality": row.sleep_quality,
+        "weight_kg": row.weight_kg,
+        "body_fat_pct": row.body_fat_pct,
+        "session_duration_min": row.session_duration_min,
+        "habit_completed": row.habit_completed,
+        "habit_value": row.habit_value,
+        "resentment_score": row.resentment_score,
+        "guilt_score": row.guilt_score,
+        "shame_score": row.shame_score,
+        "fear_score": row.fear_score,
+        "encrypted_dek": row.encrypted_dek,
+        "encrypted_content": row.encrypted_content,
+        "version": row.version,
+        "deleted_at": row.deleted_at,
+        "deleted": row.deleted_at is not None,
+    }
+
+
+def _row_values(item: EntrySyncItem, user_id: UUID) -> dict:
+    return {
+        "id": item.id,
+        "user_id": user_id,
+        "timestamp": item.timestamp,
+        "entry_type": item.entry_type,
+        "skill_id": item.skill_id,
+        "habit_id": item.habit_id,
+        "context_id": item.context_id,
+        "tags": item.tags,
+        "mood_score": item.mood_score,
+        "energy_score": item.energy_score,
+        "anxiety_score": item.anxiety_score,
+        "focus_score": item.focus_score,
+        "social_battery_score": item.social_battery_score,
+        "stress_score": item.stress_score,
+        "sleep_hours": item.sleep_hours,
+        "sleep_quality": item.sleep_quality,
+        "weight_kg": item.weight_kg,
+        "body_fat_pct": item.body_fat_pct,
+        "session_duration_min": item.session_duration_min,
+        "habit_completed": item.habit_completed,
+        "habit_value": item.habit_value,
+        "resentment_score": item.resentment_score,
+        "guilt_score": item.guilt_score,
+        "shame_score": item.shame_score,
+        "fear_score": item.fear_score,
+        "encrypted_dek": item.encrypted_dek,
+        "encrypted_content": item.encrypted_content,
+        "synced_from_offline": True,
+        "version": 1,
+        "deleted_at": None,
+    }
 
 
 @router.post("/sync", response_model=EntrySyncResponse)
@@ -24,71 +101,124 @@ async def sync_entries(
     db: AsyncSession = Depends(get_db),
 ) -> EntrySyncResponse:
     """
-    Accept an array of encrypted entries from the client.
-    Idempotent on `id` (ON CONFLICT DO NOTHING) — safe to retry from the
-    offline queue.
-
-    SECURITY: the server does NOT and MUST NOT attempt to decrypt
-    `encrypted_content` / `encrypted_dek`. We only log the entry ids and types.
+    Accept encrypted entries. Each item gets its own result.
+    The server never decrypts `encrypted_content` / `encrypted_dek`.
+    Logs only counts and safe reason codes.
     """
     if not payload.entries:
-        return EntrySyncResponse(saved=[], errors=[])
+        return EntrySyncResponse(results=[], saved=[], errors=[])
 
-    rows = [
-        {
-            "id": e.id,
-            "user_id": current_user.id,
-            "timestamp": e.timestamp,
-            "entry_type": e.entry_type.value,
-            "skill_id": e.skill_id,
-            "habit_id": e.habit_id,
-            "context_id": e.context_id,
-            "tags": e.tags,
-            "mood_score": e.mood_score,
-            "energy_score": e.energy_score,
-            "anxiety_score": e.anxiety_score,
-            "focus_score": e.focus_score,
-            "social_battery_score": e.social_battery_score,
-            "stress_score": e.stress_score,
-            "sleep_hours": e.sleep_hours,
-            "sleep_quality": e.sleep_quality,
-            "weight_kg": e.weight_kg,
-            "body_fat_pct": e.body_fat_pct,
-            "session_duration_min": e.session_duration_min,
-            "habit_completed": e.habit_completed,
-            "habit_value": e.habit_value,
-            "resentment_score": e.resentment_score,
-            "guilt_score": e.guilt_score,
-            "shame_score": e.shame_score,
-            "fear_score": e.fear_score,
-            "encrypted_dek": e.encrypted_dek,
-            "encrypted_content": e.encrypted_content,
-            "synced_from_offline": False,
-        }
-        for e in payload.entries
-    ]
+    user_id = current_user.id
+    incoming_ids = [item.id for item in payload.entries]
+    existing_rows = (
+        await db.execute(select(Entry).where(Entry.id.in_(incoming_ids)))
+    ).scalars().all()
+    existing_by_id = {row.id: _entry_as_dict(row) for row in existing_rows}
 
-    stmt = pg_insert(Entry).values(rows).on_conflict_do_nothing(index_elements=["id"])
-    stmt = stmt.returning(Entry.id)
-    try:
-        result = await db.execute(stmt)
-        saved_ids = [row[0] for row in result.fetchall()]
-        await db.commit()
-    except Exception as exc:
-        await db.rollback()
-        logger.exception("sync failed user=%s count=%d", current_user.id, len(rows))
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to persist entries: {exc.__class__.__name__}",
-        ) from exc
-
-    logger.info(
-        "sync ok user=%s received=%d saved=%d",
-        current_user.id,
-        len(rows),
-        len(saved_ids),
+    owned_skills = set(
+        (await db.execute(select(Skill.id).where(Skill.user_id == user_id))).scalars().all()
     )
-    return EntrySyncResponse(saved=saved_ids, errors=[])
+    owned_habits = set(
+        (await db.execute(select(Habit.id).where(Habit.user_id == user_id))).scalars().all()
+    )
+    owned_contexts = set(
+        (await db.execute(select(ContextTag.id).where(ContextTag.user_id == user_id))).scalars().all()
+    )
+
+    results: list[SyncItemResult] = []
+    created = duplicate = conflict = rejected = deleted = 0
+
+    for item in payload.entries:
+        incoming = item.model_dump()
+        status_name, reason = decide_sync_item(
+            incoming,
+            user_id=user_id,
+            existing=existing_by_id.get(item.id),
+            owned_skill_ids=owned_skills,
+            owned_habit_ids=owned_habits,
+            owned_context_ids=owned_contexts,
+        )
+        if status_name == "deleted":
+            stored = existing_by_id.get(item.id)
+            if stored and stored.get("deleted_at") is None and stored.get("user_id") == user_id:
+                live = (
+                    await db.execute(select(Entry).where(Entry.id == item.id, Entry.user_id == user_id))
+                ).scalar_one_or_none()
+                if live is not None and live.deleted_at is None:
+                    live.deleted_at = datetime.now(UTC)
+                    live.version = (live.version or 1) + 1
+                    await db.flush()
+                    existing_by_id[item.id] = _entry_as_dict(live)
+            results.append(SyncItemResult(id=item.id, status="deleted"))
+            deleted += 1
+            continue
+
+        if status_name != "created":
+            results.append(SyncItemResult(id=item.id, status=status_name, reason=reason))
+            if status_name == "duplicate":
+                duplicate += 1
+            elif status_name == "conflict":
+                conflict += 1
+            else:
+                rejected += 1
+            continue
+
+        try:
+            async with db.begin_nested():
+                db.add(Entry(**_row_values(item, user_id)))
+                await db.flush()
+            results.append(SyncItemResult(id=item.id, status="created"))
+            existing_by_id[item.id] = {**incoming, "user_id": user_id, "version": 1, "deleted_at": None}
+            created += 1
+        except IntegrityError:
+            again = (
+                await db.execute(select(Entry).where(Entry.id == item.id))
+            ).scalar_one_or_none()
+            if again is None:
+                results.append(
+                    SyncItemResult(id=item.id, status="rejected", reason="persist_failed")
+                )
+                rejected += 1
+                continue
+            status_name, reason = decide_sync_item(
+                incoming,
+                user_id=user_id,
+                existing=_entry_as_dict(again),
+                owned_skill_ids=owned_skills,
+                owned_habit_ids=owned_habits,
+                owned_context_ids=owned_contexts,
+            )
+            if status_name == "created":
+                status_name, reason = "rejected", "persist_failed"
+            results.append(SyncItemResult(id=item.id, status=status_name, reason=reason))
+            if status_name == "duplicate":
+                duplicate += 1
+            elif status_name == "conflict":
+                conflict += 1
+            elif status_name == "deleted":
+                deleted += 1
+            else:
+                rejected += 1
+
+    await db.commit()
+
+    saved = [row.id for row in results if row.status in ("created", "duplicate")]
+    errors = [
+        {"id": str(row.id), "reason": row.reason}
+        for row in results
+        if row.status in ("conflict", "rejected")
+    ]
+    logger.info(
+        "sync ok user=%s received=%d created=%d duplicate=%d conflict=%d rejected=%d deleted=%d",
+        user_id,
+        len(payload.entries),
+        created,
+        duplicate,
+        conflict,
+        rejected,
+        deleted,
+    )
+    return EntrySyncResponse(results=results, saved=saved, errors=errors)
 
 
 @router.get("", response_model=list[EntryRead])
@@ -104,7 +234,7 @@ async def list_entries(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[EntryRead]:
-    stmt = select(Entry).where(Entry.user_id == current_user.id)
+    stmt = select(Entry).where(Entry.user_id == current_user.id, Entry.deleted_at.is_(None))
     if start_date is not None:
         stmt = stmt.where(Entry.timestamp >= start_date)
     if end_date is not None:
@@ -130,7 +260,11 @@ async def get_entry(
     db: AsyncSession = Depends(get_db),
 ) -> Entry:
     result = await db.execute(
-        select(Entry).where(Entry.id == entry_id, Entry.user_id == current_user.id)
+        select(Entry).where(
+            Entry.id == entry_id,
+            Entry.user_id == current_user.id,
+            Entry.deleted_at.is_(None),
+        )
     )
     entry = result.scalar_one_or_none()
     if entry is None:

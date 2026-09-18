@@ -37,7 +37,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       getUserId: () => userIdRef.current,
       onResult: (r) => {
         if (r.attempted > 0 || r.error) setLastResult(r);
-        if (r.saved > 0) {
+        if (r.saved > 0 || (r.deleted ?? 0) > 0) {
           const uid = userIdRef.current;
           void qc.invalidateQueries({ queryKey: uid ? ["entries", uid] : ["entries"] });
         }

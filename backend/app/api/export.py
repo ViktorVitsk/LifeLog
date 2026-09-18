@@ -61,7 +61,7 @@ async def export_metadata(
 ) -> list[ExportMetadataRow]:
     stmt = (
         select(Entry)
-        .where(Entry.user_id == current_user.id)
+        .where(Entry.user_id == current_user.id, Entry.deleted_at.is_(None))
         .order_by(Entry.timestamp.desc())
         .limit(limit)
         .offset(offset)

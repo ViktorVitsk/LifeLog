@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test src/agent/*.test.ts src/lib/*.test.ts"
+    "test": "node --experimental-strip-types --test src/agent/*.test.ts src/lib/*.test.ts src/sync/*.test.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.16",

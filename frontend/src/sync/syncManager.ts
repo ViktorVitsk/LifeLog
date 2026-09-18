@@ -1,16 +1,22 @@
-import { getPendingForSync, markError, markSynced } from "../db/offlineQueue";
+import {
+  ackDeletes,
+  getEntryStatuses,
+  getPendingForSync,
+  markError,
+  markRejected,
+  markSynced,
+} from "../db/offlineQueue";
 import { api, isAuthError, isNetworkError, type EntrySyncPayload } from "../lib/api";
+import { planQueueUpdates } from "./syncContract.ts";
 
 /**
- * Tries to push every pending entry to the server in a single batched POST.
- * Idempotent on the server side (ON CONFLICT DO NOTHING on id), so retries are safe.
- *
- * Returns a summary so the UI can surface progress.
+ * Pushes pending entries in one POST. Queue status follows per-item results.
  */
 export interface SyncResult {
   attempted: number;
   saved: number;
   failed: number;
+  deleted?: number;
   error?: string;
 }
 
@@ -24,7 +30,6 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
 
   const ids = pending.map((p) => p.id);
 
-  // Strip queue-only bookkeeping fields before sending to the server.
   const payload: EntrySyncPayload[] = pending.map((p) => ({
     id: p.id,
     timestamp: p.timestamp,
@@ -52,19 +57,27 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
     fear_score: p.fear_score,
     encrypted_dek: p.encrypted_dek,
     encrypted_content: p.encrypted_content,
+    version: p.version ?? 1,
+    deleted: p.status === "pending_delete" || p.deleted === true,
   }));
 
   try {
     const resp = await api.syncEntries(payload, token);
-    const savedIds = resp.saved ?? [];
-    // Mark EVERY id we sent as synced — server uses ON CONFLICT DO NOTHING,
-    // so an id already present on the server is still "safely stored".
-    await markSynced(ids);
-    return { attempted: pending.length, saved: savedIds.length, failed: 0 };
+    const after = await getEntryStatuses(ids);
+    const deletingIds = pending.filter((p) => p.status === "pending_delete" || p.deleted).map((p) => p.id);
+    const hideCreatedIfTombstone = ids.filter((id) => after[id] === "pending_delete");
+    const plan = planQueueUpdates(resp, ids, { deletingIds, hideCreatedIfTombstone });
+    await markSynced(plan.markSynced);
+    await markRejected(plan.markRejected);
+    await ackDeletes(plan.ackDelete);
+    return {
+      attempted: pending.length,
+      saved: plan.markSynced.length,
+      failed: plan.markRejected.length,
+      deleted: plan.ackDelete.length,
+      error: plan.markRejected[0]?.reason,
+    };
   } catch (e) {
-    // Network failures (offline, DNS, server down) are transient — keep rows
-    // as "pending" and silently wait for the next tick. Only genuine server
-    // rejections (4xx/5xx with a message) should be recorded as "error".
     if (isNetworkError(e)) {
       return {
         attempted: pending.length,
@@ -87,13 +100,8 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Lifecycle: start / stop
-// ─────────────────────────────────────────────────────────────────────────────
-
 export interface SyncManagerHandle {
   stop: () => void;
-  /** Ask for an immediate sync pass (non-blocking). */
   trigger: () => void;
 }
 

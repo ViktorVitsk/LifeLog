@@ -11,6 +11,7 @@ export const STRINGS = {
     offline: "офлайн",
     pending: "в очереди",
     synced: "синхрон.",
+    rejected: "отклонено",
     loginTitle: "Вход",
     registerTitle: "Регистрация",
     loginHint:
@@ -439,6 +440,7 @@ export const STRINGS = {
     offline: "offline",
     pending: "pending",
     synced: "synced",
+    rejected: "rejected",
     loginTitle: "Login",
     registerTitle: "Register",
     loginHint:

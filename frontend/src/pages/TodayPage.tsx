@@ -24,7 +24,7 @@ import ToolPill from "../components/today/ToolPill";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useSync } from "../context/SyncContext";
-import { deleteLocalEntries } from "../db/offlineQueue";
+import { markPendingDelete } from "../db/offlineQueue";
 import { useHabits, useSkills } from "../hooks/useCatalog";
 import { useEntries } from "../hooks/useEntries";
 import { useIsMdUp } from "../hooks/useIsMdUp";
@@ -311,8 +311,9 @@ export default function TodayPage() {
 
   async function undoLast() {
     if (!undo) return;
-    await deleteLocalEntries(undo.ids);
+    await markPendingDelete(undo.ids);
     setUndo(null);
+    sync.trigger();
     await qc.invalidateQueries({ queryKey: ["entries", userId] });
   }
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,13 +47,55 @@ class EntryCreate(EntryBase):
     encrypted_content: str
 
 
+class EntrySyncItem(BaseModel):
+    """Permissive sync item. Range/enum/FK checks happen per row, not as HTTP 422."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: UUID
+    timestamp: datetime
+    entry_type: str
+    skill_id: UUID | None = None
+    habit_id: UUID | None = None
+    context_id: UUID | None = None
+    tags: list[str] = Field(default_factory=list)
+    mood_score: int | None = None
+    energy_score: int | None = None
+    anxiety_score: int | None = None
+    focus_score: int | None = None
+    social_battery_score: int | None = None
+    stress_score: int | None = None
+    sleep_hours: float | None = None
+    sleep_quality: int | None = None
+    weight_kg: float | None = None
+    body_fat_pct: float | None = None
+    session_duration_min: int | None = None
+    habit_completed: bool | None = None
+    habit_value: float | None = None
+    resentment_score: int | None = None
+    guilt_score: int | None = None
+    shame_score: int | None = None
+    fear_score: int | None = None
+    encrypted_dek: str = ""
+    encrypted_content: str = ""
+    version: int | None = None
+    deleted: bool = False
+
+
 class EntrySyncRequest(BaseModel):
-    entries: list[EntryCreate]
+    entries: list[EntrySyncItem]
+
+
+class SyncItemResult(BaseModel):
+    id: UUID
+    status: Literal["created", "duplicate", "conflict", "rejected", "deleted"]
+    reason: str | None = None
 
 
 class EntrySyncResponse(BaseModel):
-    saved: list[UUID]
-    errors: list[dict] = Field(default_factory=list)
+    results: list[SyncItemResult] = Field(default_factory=list)
+    saved: list[UUID] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EntryRead(EntryBase):
@@ -64,3 +107,4 @@ class EntryRead(EntryBase):
     encrypted_content: str
     created_at: datetime
     synced_from_offline: bool
+    version: int = 1

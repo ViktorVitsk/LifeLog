@@ -102,6 +102,8 @@ class Entry(Base):
         nullable=False,
     )
     synced_from_offline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_entries_user_timestamp", "user_id", "timestamp"),

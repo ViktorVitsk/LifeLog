@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { getSessionToken, useAuth } from "../context/AuthContext";
 import { db, type PendingEntry } from "../db/offlineQueue";
 import { api, AuthError, type EntryRead } from "../lib/api";
+import { mergeEntryStreams } from "../sync/mergeEntries";
 
 /**
  * Unified entry stream: server (synced) + local Dexie (pending/error).
@@ -17,11 +18,17 @@ import { api, AuthError, type EntryRead } from "../lib/api";
  * NEVER decrypted in this hook — that's the architecture's whole point.
  */
 
-export type MergedEntry = EntryRead & { _source: "server" | "pending" | "error" };
+export type MergedEntry = EntryRead & { _source: "server" | "pending" | "error" | "rejected" };
 
 function normalizeLocal(p: PendingEntry): MergedEntry {
   const source: MergedEntry["_source"] =
-    p.status === "error" ? "error" : p.status === "synced" ? "server" : "pending";
+    p.status === "rejected"
+      ? "rejected"
+      : p.status === "error"
+        ? "error"
+        : p.status === "synced"
+          ? "server"
+          : "pending";
   return {
     ...p,
     created_at: new Date(p.queued_at).toISOString(),
@@ -46,23 +53,32 @@ export function useEntries() {
   const local = useLiveQuery(() => db.entries.toArray(), [], [] as PendingEntry[]);
 
   const merged = useMemo<MergedEntry[]>(() => {
-    const byId = new Map<string, MergedEntry>();
-
-    for (const row of local ?? []) {
-      if (!userId || row.owner_user_id !== userId) continue;
-      byId.set(row.id, normalizeLocal(row));
+    const plan = mergeEntryStreams(local ?? [], serverQuery.data ?? [], userId);
+    const rows: MergedEntry[] = [];
+    for (const item of plan) {
+      if (item.source !== "server" && item.local) {
+        rows.push(normalizeLocal(item.local));
+        continue;
+      }
+      if (item.server) {
+        rows.push({ ...item.server, _source: "server" });
+        continue;
+      }
+      if (item.local) rows.push(normalizeLocal(item.local));
     }
-    for (const row of serverQuery.data ?? []) {
-      byId.set(row.id, { ...row, _source: "server" });
-    }
-    return [...byId.values()].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+    return rows.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
   }, [serverQuery.data, local, userId]);
 
   const pendingCount = useMemo(
     () =>
       (local ?? []).filter(
         (r) =>
-          (r.status === "pending" || r.status === "error") && userId && r.owner_user_id === userId,
+          (r.status === "pending" ||
+            r.status === "error" ||
+            r.status === "rejected" ||
+            r.status === "pending_delete") &&
+          userId &&
+          r.owner_user_id === userId,
       ).length,
     [local, userId],
   );

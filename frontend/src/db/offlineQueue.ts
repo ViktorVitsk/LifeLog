@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import { assertEncryptAllowed, getCurrentUserId, requireCurrentUserId } from "../lib/accountScope";
 import type { EntrySyncPayload } from "../lib/api";
 
-export type QueueStatus = "pending" | "synced" | "error";
+export type QueueStatus = "pending" | "synced" | "error" | "rejected" | "pending_delete";
 
 export interface PendingEntry extends EntrySyncPayload {
   status: QueueStatus;
@@ -95,7 +95,14 @@ export async function enqueueEntry(payload: EntrySyncPayload): Promise<void> {
 
 export async function markSynced(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  await db.entries.where("id").anyOf(ids).modify({ status: "synced", attempts: 0 });
+  await db.entries
+    .where("id")
+    .anyOf(ids)
+    .modify((entry) => {
+      entry.status = "synced";
+      entry.attempts = 0;
+      if (entry.version == null) entry.version = 1;
+    });
 }
 
 export async function markError(ids: string[], error: string): Promise<void> {
@@ -111,12 +118,28 @@ export async function markError(ids: string[], error: string): Promise<void> {
     });
 }
 
+export async function markRejected(items: { id: string; reason: string }[]): Promise<void> {
+  if (items.length === 0) return;
+  const byId = new Map(items.map((item) => [item.id, item.reason.slice(0, 200)]));
+  await db.entries
+    .where("id")
+    .anyOf([...byId.keys()])
+    .modify((entry) => {
+      const reason = byId.get(entry.id);
+      if (!reason) return;
+      entry.status = "rejected";
+      entry.last_error = reason;
+      entry.last_attempt_at = Date.now();
+      entry.attempts = (entry.attempts ?? 0) + 1;
+    });
+}
+
 export async function getPendingForSync(limit = 50, userId?: string): Promise<PendingEntry[]> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return [];
   const rows = await db.entries
     .where("status")
-    .anyOf(["pending", "error"])
+    .anyOf(["pending", "error", "pending_delete"])
     .sortBy("queued_at");
   return rows.filter((r) => r.owner_user_id === owner).slice(0, limit);
 }
@@ -124,8 +147,36 @@ export async function getPendingForSync(limit = 50, userId?: string): Promise<Pe
 export async function countPending(userId?: string): Promise<number> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return 0;
-  const rows = await db.entries.where("status").anyOf(["pending", "error"]).toArray();
+  const rows = await db.entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
   return rows.filter((r) => r.owner_user_id === owner).length;
+}
+
+export async function markPendingDelete(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const owner = getCurrentUserId();
+  if (!owner) return;
+  await db.entries
+    .where("id")
+    .anyOf(ids)
+    .modify((entry) => {
+      if (entry.owner_user_id !== owner) return;
+      entry.status = "pending_delete";
+      entry.deleted = true;
+      entry.last_attempt_at = Date.now();
+    });
+}
+
+export async function ackDeletes(ids: string[]): Promise<void> {
+  await deleteLocalEntries(ids);
+}
+
+export async function getEntryStatuses(ids: string[]): Promise<Record<string, QueueStatus>> {
+  const rows = await db.entries.bulkGet(ids);
+  const out: Record<string, QueueStatus> = {};
+  for (const row of rows) {
+    if (row) out[row.id] = row.status;
+  }
+  return out;
 }
 
 export async function getRecentEntries(sinceMs: number): Promise<PendingEntry[]> {

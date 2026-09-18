@@ -173,6 +173,13 @@ function SourceBadge({ source, t }: { source: MergedEntry["_source"]; t: TString
       </span>
     );
   }
+  if (source === "rejected") {
+    return (
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-900/40 border border-rose-700 text-rose-200">
+        {t.rejected}
+      </span>
+    );
+  }
   if (source === "error") {
     return (
       <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-900/40 border border-rose-700 text-rose-200">

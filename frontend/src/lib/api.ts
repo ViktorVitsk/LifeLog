@@ -96,6 +96,8 @@ export interface EntrySyncPayload {
   fear_score?: number | null;
   encrypted_dek: string;
   encrypted_content: string;
+  version?: number | null;
+  deleted?: boolean;
 }
 
 export interface EntryRead extends EntrySyncPayload {
@@ -228,7 +230,11 @@ export const api = {
   async syncEntries(
     entries: EntrySyncPayload[],
     token: string,
-  ): Promise<{ saved: string[]; errors: unknown[] }> {
+  ): Promise<{
+    saved: string[];
+    errors: unknown[];
+    results?: { id: string; status: string; reason?: string | null }[];
+  }> {
     return request("/api/entries/sync", {
       method: "POST",
       token,

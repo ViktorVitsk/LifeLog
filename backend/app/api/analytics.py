@@ -79,6 +79,7 @@ async def get_trends(
         select(bucket, func.avg(col).label("avg_val"))
         .where(
             Entry.user_id == current_user.id,
+            Entry.deleted_at.is_(None),
             Entry.timestamp >= since,
             col.isnot(None),
         )
@@ -116,6 +117,7 @@ async def get_correlations(
         select(bx, func.avg(xcol).label("xv"))
         .where(
             Entry.user_id == current_user.id,
+            Entry.deleted_at.is_(None),
             Entry.timestamp >= since,
             xcol.isnot(None),
         )
@@ -127,6 +129,7 @@ async def get_correlations(
         select(by, func.avg(ycol).label("yv"))
         .where(
             Entry.user_id == current_user.id,
+            Entry.deleted_at.is_(None),
             Entry.timestamp >= since,
             ycol.isnot(None),
         )

@@ -146,7 +146,7 @@ describe("A2 context envelope", () => {
   it("search window does not include dates outside the envelope", () => {
     const envelope = resolveContextEnvelope({ ...DEFAULT_LLM_SETTINGS, context_policy: "today" });
     const old = { timestamp: new Date(envelope.windowStart.getTime() - 3 * 86400000).toISOString() };
-    const now = { timestamp: new Date().toISOString() };
+    const now = { timestamp: envelope.windowEnd.toISOString() };
     const rows = filterByWindow([old, now], envelope.windowStart, envelope.windowEnd);
     assert.equal(rows.includes(old), false);
     assert.equal(rows.includes(now), true);

@@ -2,30 +2,29 @@ import EmotionalHistory from "../components/psychology/EmotionalHistory";
 import GapChart from "../components/psychology/GapChart";
 import GratitudeLog from "../components/psychology/GratitudeLog";
 import PatternInsights from "../components/psychology/PatternInsights";
+import { useLocale } from "../context/LocaleContext";
 import { useEntries } from "../hooks/useEntries";
 import { isNetworkError } from "../lib/api";
 
 export default function PsychologyPage() {
+  const { t } = useLocale();
   const { entries, isLoading, error } = useEntries();
   const offline: boolean = error ? isNetworkError(error) : false;
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Psychology</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Gap-model emotions and gratitude. Scores are open metrics; text is
-          decrypted locally only when you open it.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.psychologyTitle}</h1>
+        <p className="text-sm text-zinc-400 mt-1">{t.psychologyHint}</p>
       </div>
 
       {offline ? (
         <div className="rounded border border-zinc-700 bg-zinc-900/50 text-zinc-300 text-xs p-2">
-          Offline — showing locally stored entries. Sync will resume automatically.
+          {t.offlineLocal}
         </div>
       ) : error ? (
         <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
-          Failed to load entries: {error.message}
+          {t.loadFailed}: {error.message}
         </div>
       ) : null}
 
@@ -39,7 +38,7 @@ export default function PsychologyPage() {
       <EmotionalHistory entries={entries} />
 
       <div className="text-[11px] text-zinc-500">
-        {isLoading ? "loading…" : `${entries.length} entries total`}
+        {isLoading ? t.loading : t.entriesTotal.replace("{n}", String(entries.length))}
       </div>
     </div>
   );

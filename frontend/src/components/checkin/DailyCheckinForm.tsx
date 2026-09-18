@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import Slider from "../ui/Slider";
 
@@ -7,6 +8,7 @@ type TimeOfDay = "morning" | "afternoon" | "evening";
 
 export default function DailyCheckinForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(inferTimeOfDay());
   const [mood, setMood] = useState(7);
   const [energy, setEnergy] = useState(7);
@@ -54,19 +56,19 @@ export default function DailyCheckinForm({ onSubmitted }: { onSubmitted: () => v
       <TimeOfDaySelector value={timeOfDay} onChange={setTimeOfDay} />
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Slider label="Mood" value={mood} onChange={setMood} />
-        <Slider label="Energy" value={energy} onChange={setEnergy} />
-        <Slider label="Anxiety" value={anxiety} onChange={setAnxiety} />
-        <Slider label="Focus" value={focus} onChange={setFocus} />
-        <Slider label="Social battery" value={socialBattery} onChange={setSocialBattery} />
-        <Slider label="Stress" value={stress} onChange={setStress} />
+        <Slider label={t.mood} value={mood} onChange={setMood} />
+        <Slider label={t.energy} value={energy} onChange={setEnergy} />
+        <Slider label={t.anxiety} value={anxiety} onChange={setAnxiety} />
+        <Slider label={t.focus} value={focus} onChange={setFocus} />
+        <Slider label={t.socialBattery} value={socialBattery} onChange={setSocialBattery} />
+        <Slider label={t.stress} value={stress} onChange={setStress} />
       </div>
 
       <div>
-        <label className="text-sm text-zinc-300">Notes (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.notesEncrypted}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-24"
-          placeholder="What's on your mind? Only you can decrypt this."
+          placeholder={t.notesPlaceholder}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
@@ -83,7 +85,7 @@ export default function DailyCheckinForm({ onSubmitted }: { onSubmitted: () => v
         disabled={busy}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save check-in"}
+        {busy ? "…" : t.saveCheckin}
       </button>
     </div>
   );
@@ -96,19 +98,24 @@ function TimeOfDaySelector({
   value: TimeOfDay;
   onChange: (v: TimeOfDay) => void;
 }) {
-  const opts: TimeOfDay[] = ["morning", "afternoon", "evening"];
+  const { t } = useLocale();
+  const opts: { id: TimeOfDay; label: string }[] = [
+    { id: "morning", label: t.morning },
+    { id: "afternoon", label: t.afternoon },
+    { id: "evening", label: t.evening },
+  ];
   return (
     <div className="flex gap-1 rounded border border-zinc-800 p-0.5 text-sm">
       {opts.map((o) => (
         <button
-          key={o}
+          key={o.id}
           type="button"
-          onClick={() => onChange(o)}
-          className={`flex-1 py-1.5 rounded capitalize ${
-            value === o ? "bg-indigo-600 text-white" : "text-zinc-400 hover:bg-zinc-800"
+          onClick={() => onChange(o.id)}
+          className={`flex-1 py-1.5 rounded ${
+            value === o.id ? "bg-indigo-600 text-white" : "text-zinc-400 hover:bg-zinc-800"
           }`}
         >
-          {o}
+          {o.label}
         </button>
       ))}
     </div>

@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 
 export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
   const [weightKg, setWeightKg] = useState("");
   const [bodyFatPct, setBodyFatPct] = useState("");
   const [waistCm, setWaistCm] = useState("");
@@ -17,11 +19,11 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
     const w = weightKg.trim() === "" ? null : Number(weightKg);
     const bf = bodyFatPct.trim() === "" ? null : Number(bodyFatPct);
     if (w != null && (Number.isNaN(w) || w <= 0)) {
-      setErr("Weight must be a positive number if provided.");
+      setErr(t.weightPositive);
       return;
     }
     if (bf != null && (Number.isNaN(bf) || bf < 0 || bf > 100)) {
-      setErr("Body fat % must be between 0 and 100.");
+      setErr(t.bodyFatRange);
       return;
     }
     setBusy(true);
@@ -29,12 +31,12 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
     const waistNum = waistCm.trim() === "" ? undefined : Number(waistCm);
     const hrNum = restingHr.trim() === "" ? undefined : Number(restingHr);
     if (waistNum !== undefined && Number.isNaN(waistNum)) {
-      setErr("Waist must be a number.");
+      setErr(t.waistNumber);
       setBusy(false);
       return;
     }
     if (hrNum !== undefined && Number.isNaN(hrNum)) {
-      setErr("Resting HR must be a number.");
+      setErr(t.hrNumber);
       setBusy(false);
       return;
     }
@@ -68,13 +70,10 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
 
   return (
     <div className="space-y-5">
-      <p className="text-xs text-zinc-500">
-        Weight and body fat % are stored as open numbers for charts; other measurements stay
-        encrypted.
-      </p>
+      <p className="text-xs text-zinc-500">{t.bodyHint}</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label className="text-sm text-zinc-300">Weight (kg, open)</label>
+          <label className="text-sm text-zinc-300">{t.weightOpen}</label>
           <input
             type="number"
             min={0}
@@ -86,20 +85,20 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
           />
         </div>
         <div>
-          <label className="text-sm text-zinc-300">Body fat % (open)</label>
+          <label className="text-sm text-zinc-300">{t.bodyFatOpen}</label>
           <input
             type="number"
             min={0}
             max={100}
             step={0.1}
-            placeholder="optional"
+            placeholder={t.optional}
             value={bodyFatPct}
             onChange={(e) => setBodyFatPct(e.target.value)}
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
           />
         </div>
         <div>
-          <label className="text-sm text-zinc-300">Waist (cm, encrypted)</label>
+          <label className="text-sm text-zinc-300">{t.waistEnc}</label>
           <input
             type="number"
             min={0}
@@ -110,7 +109,7 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
           />
         </div>
         <div>
-          <label className="text-sm text-zinc-300">Resting HR (encrypted)</label>
+          <label className="text-sm text-zinc-300">{t.restingHrEnc}</label>
           <input
             type="number"
             min={0}
@@ -122,10 +121,10 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
       </div>
 
       <div>
-        <label className="text-sm text-zinc-300">Notes (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.notesEncrypted}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
-          placeholder="How you feel, training load, etc."
+          placeholder={t.bodyNotesPlaceholder}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
@@ -142,7 +141,7 @@ export default function BodyMetricsForm({ onSubmitted }: { onSubmitted: () => vo
         disabled={busy}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save body metrics"}
+        {busy ? "…" : t.saveBody}
       </button>
     </div>
   );

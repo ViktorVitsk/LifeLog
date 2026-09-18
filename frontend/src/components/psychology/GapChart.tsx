@@ -9,7 +9,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useLocale } from "../../context/LocaleContext";
 import type { MergedEntry } from "../../hooks/useEntries";
+import { dateLocale } from "../../i18n/locale";
 
 interface Props {
   entries: MergedEntry[];
@@ -32,7 +34,16 @@ const EMOTION_COLORS = {
  * hybrid model from ARCHITECTURE §6.
  */
 export default function GapChart({ entries, days = 30 }: Props) {
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
   const data = useMemo(() => buildDailySeries(entries, days), [entries, days]);
+  const tick = (s: string) => formatDayTick(s, loc);
+  const names = {
+    resentment: t.resentment,
+    guilt: t.guilt,
+    shame: t.shame,
+    fear: t.fear,
+  };
 
   const hasAny = data.some(
     (d) =>
@@ -45,13 +56,13 @@ export default function GapChart({ entries, days = 30 }: Props) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm font-medium text-zinc-200">Gap-model emotions</h3>
-        <span className="text-[11px] text-zinc-500">last {days} days (daily avg)</span>
+        <h3 className="text-sm font-medium text-zinc-200">{t.gapEmotions}</h3>
+        <span className="text-[11px] text-zinc-500">{t.lastDays.replace("{n}", String(days))}</span>
       </div>
 
       {!hasAny ? (
         <div className="h-64 flex items-center justify-center text-sm text-zinc-500">
-          No emotional state entries yet — add one in Check-in · Emotion.
+          {t.noEmotionYet}
         </div>
       ) : (
         <div className="h-64">
@@ -62,7 +73,7 @@ export default function GapChart({ entries, days = 30 }: Props) {
                 dataKey="day"
                 stroke="#71717a"
                 fontSize={11}
-                tickFormatter={formatDayTick}
+                tickFormatter={tick}
               />
               <YAxis stroke="#71717a" fontSize={11} domain={[0, 10]} />
               <Tooltip
@@ -72,7 +83,7 @@ export default function GapChart({ entries, days = 30 }: Props) {
                   borderRadius: 6,
                   fontSize: 12,
                 }}
-                labelFormatter={formatDayTick}
+                labelFormatter={tick}
               />
               <Legend wrapperStyle={{ fontSize: 11, color: "#a1a1aa" }} />
               {(Object.keys(EMOTION_COLORS) as (keyof typeof EMOTION_COLORS)[]).map((k) => (
@@ -84,7 +95,7 @@ export default function GapChart({ entries, days = 30 }: Props) {
                   strokeWidth={2}
                   dot={false}
                   connectNulls={false}
-                  name={k}
+                  name={names[k]}
                 />
               ))}
             </LineChart>
@@ -151,8 +162,8 @@ function dayKey(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-function formatDayTick(s: string) {
+function formatDayTick(s: string, loc: string) {
   const [y, m, d] = s.split("-").map(Number);
   const date = new Date(y, m - 1, d);
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return date.toLocaleDateString(loc, { month: "short", day: "numeric" });
 }

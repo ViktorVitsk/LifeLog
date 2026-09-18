@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
+import LanguageSelect from "../components/LanguageSelect";
 import { useAuth } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
 import { api } from "../lib/api";
 
 type Mode = "login" | "register";
@@ -8,13 +10,14 @@ type Mode = "login" | "register";
 export default function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
+  const { t } = useLocale();
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (auth.isFullyAuthenticated) return <Navigate to="/checkin" replace />;
+  if (auth.isFullyAuthenticated) return <Navigate to="/" replace />;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -26,7 +29,7 @@ export default function LoginPage() {
       }
       const res = await api.login(username, password);
       await auth.setAuthenticated(username, res.access_token, password, res.salt);
-      navigate("/checkin", { replace: true });
+      navigate("/", { replace: true });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -40,44 +43,45 @@ export default function LoginPage() {
         onSubmit={onSubmit}
         className="w-full max-w-sm space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/50 p-6"
       >
-        <div>
-          <h1 className="text-xl font-semibold">LifeLog</h1>
-          <p className="text-sm text-zinc-400 mt-1">
-            {mode === "login"
-              ? "Enter your master password to derive the key in-memory."
-              : "Create a new account. Choose a strong master password — only you can decrypt your data."}
-          </p>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h1 className="text-xl font-semibold">LifeLog</h1>
+            <p className="text-sm text-zinc-400 mt-1">
+              {mode === "login" ? t.loginHint : t.registerHint}
+            </p>
+          </div>
+          <LanguageSelect compact />
         </div>
 
         <div className="flex rounded border border-zinc-800 p-0.5 text-sm">
           <button
             type="button"
-            className={`flex-1 py-1.5 rounded ${mode === "login" ? "bg-indigo-600 text-white" : "text-zinc-400"}`}
+            className={`flex-1 min-h-[44px] rounded ${mode === "login" ? "bg-indigo-600 text-white" : "text-zinc-400"}`}
             onClick={() => setMode("login")}
           >
-            Login
+            {t.loginTitle}
           </button>
           <button
             type="button"
-            className={`flex-1 py-1.5 rounded ${mode === "register" ? "bg-indigo-600 text-white" : "text-zinc-400"}`}
+            className={`flex-1 min-h-[44px] rounded ${mode === "register" ? "bg-indigo-600 text-white" : "text-zinc-400"}`}
             onClick={() => setMode("register")}
           >
-            Register
+            {t.registerTitle}
           </button>
         </div>
 
         <div className="space-y-2">
           <input
-            className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
-            placeholder="username"
+            className="w-full min-h-[44px] rounded bg-zinc-900 border border-zinc-700 px-3"
+            placeholder={t.username}
             autoComplete="username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
           <input
-            className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
+            className="w-full min-h-[44px] rounded bg-zinc-900 border border-zinc-700 px-3"
             type="password"
-            placeholder="master password (≥ 8 chars)"
+            placeholder={t.masterPassword}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -93,14 +97,12 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={busy || !username || password.length < 8}
-          className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
+          className="w-full min-h-[44px] rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
         >
-          {busy ? "…" : mode === "login" ? "Login & derive KEK" : "Register & login"}
+          {busy ? "…" : mode === "login" ? t.loginSubmit : t.registerSubmit}
         </button>
 
-        <p className="text-[11px] text-zinc-500 text-center">
-          KEK lives only in memory. A refresh forces re-entry of this password.
-        </p>
+        <p className="text-[11px] text-zinc-500 text-center">{t.kekHint}</p>
       </form>
     </div>
   );

@@ -1,5 +1,8 @@
 import { useMemo } from "react";
+import { useLocale } from "../../context/LocaleContext";
 import type { EntryRead } from "../../lib/api";
+import { dateLocale } from "../../i18n/locale";
+import { weekdayLabels } from "../../i18n/strings";
 
 interface Props {
   entries: EntryRead[];
@@ -12,20 +15,23 @@ interface Props {
  * Intensity from count of HABIT_LOG rows that day with habit_completed === true.
  */
 export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
+  const days = weekdayLabels(t);
   const { cells, monthLabels } = useMemo(
-    () => buildGrid(entries, habitId, weeks),
-    [entries, habitId, weeks],
+    () => buildGrid(entries, habitId, weeks, loc),
+    [entries, habitId, weeks, loc],
   );
 
   if (!habitId) {
-    return <div className="text-sm text-zinc-500">Select a habit.</div>;
+    return <div className="text-sm text-zinc-500">{t.selectHabit}</div>;
   }
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 overflow-x-auto">
       <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm font-medium text-zinc-200">Completion heatmap</h3>
-        <span className="text-[11px] text-zinc-500">{weeks} weeks · darker = more completed</span>
+        <h3 className="text-sm font-medium text-zinc-200">{t.heatmapTitle}</h3>
+        <span className="text-[11px] text-zinc-500">{t.heatmapHint.replace("{n}", String(weeks))}</span>
       </div>
       <div className="min-w-max">
         <div className="flex gap-2 mb-1">
@@ -44,7 +50,7 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
         </div>
         <div className="flex gap-2">
           <div className="flex flex-col gap-[3px] text-[10px] text-zinc-500 w-7">
-            {WEEKDAY_LABELS.map((w) => (
+            {days.map((w) => (
               <div key={w} className="h-3 leading-3">
                 {w}
               </div>
@@ -58,8 +64,10 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
                     key={di}
                     title={
                       cell.inFuture
-                        ? `${cell.label} — future`
-                        : `${cell.label}: ${cell.totalLogs} log(s) · ${cell.count} completed`
+                        ? `${cell.label} — ${t.future}`
+                        : `${cell.label}: ${t.logsCompleted
+                            .replace("{logs}", String(cell.totalLogs))
+                            .replace("{done}", String(cell.count))}`
                     }
                     className={`w-3 h-3 rounded-sm ${intensityClass(cell)}`}
                   />
@@ -70,12 +78,12 @@ export default function HabitHeatmap({ entries, habitId, weeks = 14 }: Props) {
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2 text-[10px] text-zinc-500">
-        <span>Less</span>
+        <span>{t.less}</span>
         <span className="w-3 h-3 rounded-sm bg-zinc-800" />
         <span className="w-3 h-3 rounded-sm bg-emerald-900/50" />
         <span className="w-3 h-3 rounded-sm bg-emerald-700/60" />
         <span className="w-3 h-3 rounded-sm bg-emerald-500" />
-        <span>More</span>
+        <span>{t.more}</span>
       </div>
     </div>
   );
@@ -90,8 +98,6 @@ interface Cell {
   totalLogs: number;
   inFuture?: boolean;
 }
-
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 function sameUuid(a: unknown, b: string): boolean {
   if (a == null || !b) return false;
@@ -113,7 +119,7 @@ function intensityClass(cell: Cell) {
   return "bg-emerald-500";
 }
 
-function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
+function buildGrid(entries: EntryRead[], habitId: string, weeks: number, loc: string) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   /** Calendar day in local TZ — never compare raw timestamps to "today midnight"
@@ -150,7 +156,7 @@ function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
     const agg = byDay.get(k);
     flat.push({
       day: k,
-      label: formatDayLabel(k),
+      label: formatDayLabel(k, loc),
       count: inFuture ? 0 : (agg?.done ?? 0),
       totalLogs: inFuture ? 0 : (agg?.total ?? 0),
       inFuture,
@@ -168,7 +174,7 @@ function buildGrid(entries: EntryRead[], habitId: string, weeks: number) {
     cells.push(col);
     const firstOfWeek = flat[w * 7];
     const prevMonday = w === 0 ? null : flat[(w - 1) * 7]?.day ?? null;
-    monthLabels.push(firstOfWeek ? monthTick(firstOfWeek.day, prevMonday) : "");
+    monthLabels.push(firstOfWeek ? monthTick(firstOfWeek.day, prevMonday, loc) : "");
   }
 
   return { cells, monthLabels };
@@ -191,13 +197,13 @@ function endOfWeekSunday(d: Date): Date {
   return sun;
 }
 
-function monthTick(dayIso: string, prevWeekFirstIso: string | null | undefined) {
+function monthTick(dayIso: string, prevWeekFirstIso: string | null | undefined, loc: string) {
   const [y, m] = dayIso.split("-").map(Number);
   if (prevWeekFirstIso) {
     const [py, pm] = prevWeekFirstIso.split("-").map(Number);
     if (pm === m && py === y) return "";
   }
-  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "short" });
+  return new Date(y, m - 1, 1).toLocaleDateString(loc, { month: "short" });
 }
 
 function dayKey(d: Date) {
@@ -207,10 +213,10 @@ function dayKey(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-function formatDayLabel(dayIso: string) {
+function formatDayLabel(dayIso: string, loc: string) {
   const [y, m, d] = dayIso.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString(undefined, {
+  return dt.toLocaleDateString(loc, {
     day: "numeric",
     month: "short",
   });

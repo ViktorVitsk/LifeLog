@@ -19,16 +19,19 @@ export async function encryptAndEnqueue(args: {
   openFields: Partial<
     Omit<EntrySyncPayload, "id" | "timestamp" | "entry_type" | "encrypted_content" | "encrypted_dek">
   >;
+  /** Client event time (ISO UTC). Defaults to now. */
+  timestamp?: string;
+  id?: string;
 }): Promise<{ id: string }> {
   const { kek, entry_type, plaintext, openFields } = args;
 
   const plaintextJson = JSON.stringify({ v: 1, ...plaintext });
   const { encryptedContent, encryptedDek } = await encryptEntry(plaintextJson, kek);
 
-  const id = crypto.randomUUID();
+  const id = args.id ?? crypto.randomUUID();
   const payload: EntrySyncPayload = {
     id,
-    timestamp: new Date().toISOString(),
+    timestamp: args.timestamp ?? new Date().toISOString(),
     entry_type,
     tags: openFields.tags ?? [],
     mood_score: openFields.mood_score ?? null,

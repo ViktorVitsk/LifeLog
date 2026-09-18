@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import Slider from "../ui/Slider";
 
 export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
   const [sleepHours, setSleepHours] = useState(7.5);
   const [sleepQuality, setSleepQuality] = useState(7);
   const [bedtime, setBedtime] = useState("");
@@ -46,7 +48,7 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
   return (
     <div className="space-y-5">
       <div>
-        <label className="text-sm text-zinc-300">Sleep duration (hours)</label>
+        <label className="text-sm text-zinc-300">{t.sleepDuration}</label>
         <input
           type="number"
           min={0}
@@ -57,11 +59,11 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
         />
       </div>
-      <Slider label="Sleep quality" value={sleepQuality} onChange={setSleepQuality} />
+      <Slider label={t.sleepQuality} value={sleepQuality} onChange={setSleepQuality} />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className="text-sm text-zinc-300">Bedtime (encrypted, optional)</label>
+          <label className="text-sm text-zinc-300">{t.bedtime}</label>
           <input
             type="time"
             value={bedtime}
@@ -70,7 +72,7 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
           />
         </div>
         <div>
-          <label className="text-sm text-zinc-300">Wake time (encrypted, optional)</label>
+          <label className="text-sm text-zinc-300">{t.wakeTime}</label>
           <input
             type="time"
             value={wakeTime}
@@ -81,10 +83,10 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
       </div>
 
       <div>
-        <label className="text-sm text-zinc-300">Dream notes (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.dreamNotes}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
-          placeholder="Optional — only you can read this."
+          placeholder={t.dreamPlaceholder}
           value={dreamNotes}
           onChange={(e) => setDreamNotes(e.target.value)}
         />
@@ -101,7 +103,7 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
         disabled={busy}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save sleep log"}
+        {busy ? "…" : t.saveSleep}
       </button>
     </div>
   );

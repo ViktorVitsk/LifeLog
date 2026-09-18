@@ -1,3 +1,4 @@
+import { useLocale } from "../../context/LocaleContext";
 import type { MetricField, MetricSchema } from "../../lib/metricSchema";
 import Slider from "../ui/Slider";
 
@@ -9,6 +10,7 @@ interface Props {
 
 /** Renders inputs for SKILL_SESSION.custom_metrics from a skill's metric_schema. */
 export default function MetricFieldsForm({ schema, value, onChange }: Props) {
+  const { t } = useLocale();
   if (schema.fields.length === 0) return null;
 
   function patch(key: string, v: string | number) {
@@ -17,7 +19,7 @@ export default function MetricFieldsForm({ schema, value, onChange }: Props) {
 
   return (
     <div className="space-y-3 rounded border border-zinc-800 bg-zinc-950/40 p-3">
-      <div className="text-xs text-zinc-500 uppercase tracking-wide">Custom metrics (encrypted)</div>
+      <div className="text-xs text-zinc-500 uppercase tracking-wide">{t.customMetricsEnc}</div>
       {schema.fields.map((f) => (
         <FieldRow key={f.key} field={f} value={value[f.key]} onChange={(v) => patch(f.key, v)} />
       ))}

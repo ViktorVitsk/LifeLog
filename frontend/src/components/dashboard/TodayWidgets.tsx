@@ -1,27 +1,32 @@
 import { useMemo } from "react";
 import type { MergedEntry } from "../../hooks/useEntries";
+import { useLocale } from "../../context/LocaleContext";
+import { entryTypeLabel } from "../../i18n/strings";
 
 interface Props {
   entries: MergedEntry[];
 }
 
 export default function TodayWidgets({ entries }: Props) {
+  const { t } = useLocale();
   const { mood, energy, anxiety, countToday, typeCounts } = useMemo(
     () => computeTodaySummary(entries),
     [entries],
   );
 
+  const hint =
+    countToday > 0
+      ? [...typeCounts.entries()]
+          .map(([k, v]) => `${v}× ${entryTypeLabel(t, k)}`)
+          .join(" · ")
+      : "—";
+
   return (
     <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-      <Stat label="Today's mood" value={fmt(mood)} tone="indigo" />
-      <Stat label="Energy" value={fmt(energy)} tone="emerald" />
-      <Stat label="Anxiety" value={fmt(anxiety)} tone="rose" />
-      <Stat
-        label="Entries today"
-        value={String(countToday)}
-        tone="zinc"
-        hint={countToday > 0 ? summarize(typeCounts) : "—"}
-      />
+      <Stat label={t.todayMood} value={fmt(mood)} tone="indigo" />
+      <Stat label={t.energy} value={fmt(energy)} tone="emerald" />
+      <Stat label={t.anxiety} value={fmt(anxiety)} tone="rose" />
+      <Stat label={t.entriesToday} value={String(countToday)} tone="zinc" hint={hint} />
     </div>
   );
 }
@@ -85,10 +90,4 @@ function computeTodaySummary(entries: MergedEntry[]) {
     countToday,
     typeCounts,
   };
-}
-
-function summarize(counts: Map<string, number>): string {
-  return [...counts.entries()]
-    .map(([k, v]) => `${v}× ${k.replace("DAILY_CHECKIN", "DAILY")}`)
-    .join(" · ");
 }

@@ -1,4 +1,6 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const rawBase = import.meta.env.VITE_API_URL;
+/** Empty = same origin (Vite proxies `/api` → LifeLog backend). */
+const BASE_URL = (typeof rawBase === "string" ? rawBase.trim() : "").replace(/\/$/, "");
 
 /**
  * Thrown when fetch itself fails (offline, DNS failure, CORS preflight

@@ -15,10 +15,11 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 | 3 — Psychology | ✅ done | `/psychology` with gap-model chart, pattern insights, gratitude log, emotional history (lazy decrypt); EMOTIONAL_STATE form in Check-in |
 | 4 — Skills & habits | ✅ done | `/api/skills` + `/api/habits`, `/skills` builder + session chart, `/habits` + heatmap, Check-in **Skill** / **Habit** tabs |
 | 5 — Analytics & polish | ✅ done | `/api/analytics/trends` + `/correlations`, `/api/export/metadata`, `/analytics`, `/journal`, `/settings` export, Check-in **Sleep** / **Body**, Alembic `0003` (`weight_kg`, `body_fat_pct`) |
+| 6 — AI capture | ✅ done | `/today` home (briefing + chat), client-side OpenRouter/Ollama agent with tools, confirm cards, charts in-thread, mobile bottom tabs |
 
 ### Phase 2 details
 
-- **Routing**: `react-router-dom` with protected routes. `/login` → `/checkin` (primary) and `/dashboard`.
+- **Routing**: `react-router-dom` with protected routes. `/login` → `/today` (primary). Manual forms remain at `/checkin`.
 - **Auth**: `AuthContext` mirrors `{ token, username, salt }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password so the KEK can be re-derived locally (no network round-trip). Wrong-password attempts are caught by unwrapping an existing entry's DEK.
 - **Offline queue**: Dexie IndexedDB table `entries` with `status: pending | synced | error`. Every submission is encrypted client-side, enqueued optimistically, and displayed instantly on the dashboard.
 - **SyncManager** (single global instance via `SyncContext`): pushes pending rows every 30 s, on `online`, on `visibilitychange`, and on explicit `trigger()` after a form submit. Idempotent on the server (`ON CONFLICT DO NOTHING`). Network failures are caught as `NetworkError`, marked silently as "offline", and retried on the next tick; only genuine 4xx/5xx rejections flip a row into the `error` state.
@@ -62,8 +63,8 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 ## Prerequisites
 
 - Docker Desktop running
-- Ports `5433` (Postgres), `8000` (API), `5173` (frontend dev) free on the host
-  - Port `5432` is intentionally avoided because a local PostgreSQL typically uses it.
+- Ports `5433` (Postgres), `8001` (LifeLog API), `5173` (frontend) free on the host
+  - `5432` is avoided (local PostgreSQL). `8000` is avoided (often another FastAPI app).
 
 ---
 
@@ -77,7 +78,7 @@ Copy-Item .env.example .env
 docker compose up --build
 
 # Then open:
-#   Backend API docs : http://localhost:8000/docs
+#   Backend API docs : http://localhost:8001/docs
 #   Frontend         : http://localhost:5173
 ```
 
@@ -132,7 +133,7 @@ Scores are plain integers, `encrypted_content` is opaque. The distortion label, 
 
 ## Phase 4 acceptance (DoD)
 
-1. Open **Swagger** `http://localhost:8000/docs` — confirm `GET/POST /api/skills`, `PUT /api/skills/{id}`, `GET/POST /api/habits`, `PUT /api/habits/{id}` exist and require auth.
+1. Open **Swagger** `http://localhost:8001/docs` — confirm `GET/POST /api/skills`, `PUT /api/skills/{id}`, `GET/POST /api/habits`, `PUT /api/habits/{id}` exist and require auth.
 2. **`/skills`**: create a skill with at least one slider metric (e.g. intensity 1–10). Open `/checkin` → **Skill**, log a session (duration + custom metric + encrypted notes). On `/skills`, select the skill — the bar chart shows minutes for days you logged; recent sessions lists open metadata only.
 3. **`/habits`**: create a daily habit. `/checkin` → **Habit** — mark completed, save. On `/habits`, select the habit — heatmap shows at least one green cell for that day. Toggle **off** on the habit → it disappears from the check-in habit list (inactive filtered out).
 4. SQL sanity — `skill_id` / `habit_id` on entries, ciphertext unchanged:
@@ -150,6 +151,27 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
 3. **`/analytics`**: With at least a few days of daily + sleep data, the trend chart and correlation scatter show points (or empty states without crashing).
 4. **`/journal`**: Tag filter narrows the list; **Decrypt** opens modal content when the KEK is present.
 5. **`/settings`**: Metadata download produces JSON without `encrypted_*` keys; full export includes decrypted `plaintext` objects for rows your KEK can open.
+
+---
+
+## Phase 6 acceptance (DoD)
+
+1. After login, home is **Today** (`/`), not Check-in. Thin top bar + four destinations: Today, Timeline, Insights, Settings. On a ~390px viewport the four items are a **bottom tab bar**; composer sits above it.
+2. **Settings → Agent**: choose OpenRouter or Ollama, save a model id, wrap an API key with the KEK (OpenRouter). Health-check either hits OpenRouter `/models` or Ollama `/api/tags`. Privacy banner states the cloud sees the chat; LifeLog server does not.
+3. With a working provider: type *«спал 6 часов, настроение плохое, зал пропустил»* → agent shows **confirm cards** (SLEEP + DAILY_CHECKIN ± HABIT_LOG). Inferred scores are editable and not silently written. Save encrypts via the existing queue (Dexie pending → sync).
+4. Ask *«покажи настроение за 30 дней»* → a Recharts trend widget appears **in the thread** (open metrics only).
+5. Refresh → unlock overlay → Today's thread decrypts from IndexedDB. Postgres still has no chat plaintext (`encrypted_content` on entries only).
+6. `/checkin` still works as manual fallback. Insights tabs still show Dashboard / Psychology / Skills / Habits / Analytics.
+7. Keyboard on mobile: composer and mic stay visible (`visualViewport`). Tap targets on tabs / Save / mic are at least 44px.
+
+**Ollama on the Windows host (GTX 1070 8GB), not in Docker:**
+
+```powershell
+# After installing Ollama with CUDA:
+$env:OLLAMA_ORIGINS = "http://localhost:5173"
+ollama pull qwen2.5:7b
+# Use Q4; keep num_ctx at 4k–8k. Do not pull 14B onto 8GB VRAM.
+```
 
 ---
 
@@ -197,25 +219,46 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
         │   ├── crypto.ts                    # Web Crypto API: KEK / DEK / encrypt / decrypt
         │   ├── api.ts                       # + skills / habits, analytics, export, listEntries filters
         │   ├── metricSchema.ts              # Skill metric_schema types + parseMetricSchema
+        │   ├── dates.ts                     # Local calendar day keys
         │   └── entrySubmit.ts               # encrypt + enqueue helper
-        ├── hooks/
-        │   ├── useEntries.ts                # React Query + Dexie merged feed
-        │   └── useDecryptedEntries.ts       # Batch / lazy client-side decryption cache
+        ├── agent/
+        │   ├── types.ts                     # Proposed entries, chart specs, LLM settings
+        │   ├── schemas.ts                   # OpenAI tool JSON schemas
+        │   ├── providers.ts                 # OpenRouter / Ollama chat completions
+        │   ├── tools.ts                     # Client-executed tools (KEK + open APIs)
+        │   ├── runtime.ts                   # Tool-calling loop + stream
+        │   ├── commit.ts                    # propose → encryptAndEnqueue mapping
+        │   ├── snapshot.ts                  # Today gaps / open metrics for the model
+        │   ├── chatStore.ts                 # Encrypted Dexie chat turns
+        │   └── settingsStore.ts             # Provider config; API key wrapped with KEK
         ├── pages/
         │   ├── LoginPage.tsx
-        │   ├── CheckinPage.tsx              # Type selector → dynamic form (+ Skill / Habit)
+        │   ├── TodayPage.tsx                # Phase 6 home: briefing + agent thread
+        │   ├── InsightsPage.tsx             # Tabs over dashboard / psych / skills / habits / analytics
+        │   ├── CheckinPage.tsx              # Type selector → dynamic form (fallback)
         │   ├── DashboardPage.tsx
-        │   ├── PsychologyPage.tsx           # Gap chart + insights + gratitude + history
-        │   ├── SkillsPage.tsx               # Skill builder + session chart
-        │   ├── HabitsPage.tsx               # Habit CRUD + heatmap
-        │   ├── AnalyticsPage.tsx            # Trends + correlations (Recharts)
-        │   ├── JournalPage.tsx              # Tag filter + decrypt preview
-        │   └── SettingsPage.tsx             # Metadata + full JSON export
+        │   ├── PsychologyPage.tsx
+        │   ├── SkillsPage.tsx
+        │   ├── HabitsPage.tsx
+        │   ├── AnalyticsPage.tsx
+        │   ├── JournalPage.tsx              # Timeline
+        │   └── SettingsPage.tsx             # LLM provider + export
+        ├── hooks/
+        │   ├── useEntries.ts                # React Query + Dexie merged feed
+        │   ├── useDecryptedEntries.ts       # Batch / lazy client-side decryption cache
+        │   ├── useIsMdUp.ts
+        │   └── useKeyboardInset.ts          # visualViewport keyboard overlap
         └── components/
-            ├── Layout.tsx                   # Nav (incl. Analytics / Journal / Settings) + SyncBadge + Outlet
+            ├── Layout.tsx                   # Mobile bottom tabs + desktop top nav
             ├── ProtectedRoute.tsx           # Shows UnlockOverlay when KEK is missing
             ├── UnlockOverlay.tsx            # Re-derive KEK after refresh
             ├── ui/Slider.tsx
+            ├── today/
+            │   ├── Briefing.tsx
+            │   ├── Composer.tsx
+            │   ├── EntryCard.tsx
+            │   ├── ChartBlock.tsx
+            │   └── ToolPill.tsx
             ├── checkin/
             │   ├── DailyCheckinForm.tsx
             │   ├── EmotionalStateForm.tsx   # Gap-model: 4 toggleable emotions + reflection + distortion
@@ -247,6 +290,7 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
 ## Security invariants (enforced by code, not docs)
 
 - The server never decrypts `encrypted_content` or `encrypted_dek`.
+- Chat with OpenRouter/Ollama is sent from the browser. FastAPI never proxies or stores chat plaintext.
 - The backend logs entry `id`, `entry_type`, `timestamp` — never ciphertext or plaintext.
 - The KEK is non-extractable and lives only in React state; on refresh the user must re-enter the password.
 - DEK is generated fresh per entry (`crypto.getRandomValues` → AES-GCM 256).
@@ -267,7 +311,7 @@ cd backend
 uv sync
 $env:DATABASE_URL = "postgresql+asyncpg://lifelog:lifelog@localhost:5433/lifelog"
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8001
 ```
 
 ```powershell

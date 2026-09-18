@@ -12,44 +12,38 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
+import { metricLabel } from "../i18n/strings";
 import { api, isNetworkError } from "../lib/api";
 
-const PERIODS = [
-  { id: "7d" as const, label: "7d" },
-  { id: "30d" as const, label: "30d" },
-  { id: "90d" as const, label: "90d" },
-  { id: "1y" as const, label: "1y" },
-];
+const PERIODS = ["7d", "30d", "90d", "1y"] as const;
 
-const TREND_OPTIONS = [
-  { value: "mood_score", label: "Mood" },
-  { value: "energy_score", label: "Energy" },
-  { value: "anxiety_score", label: "Anxiety" },
-  { value: "sleep_hours", label: "Sleep (h)" },
-  { value: "sleep_quality", label: "Sleep quality" },
-  { value: "weight_kg", label: "Weight (kg)" },
-  { value: "body_fat_pct", label: "Body fat %" },
-  { value: "focus_score", label: "Focus" },
-  { value: "stress_score", label: "Stress" },
-];
+const TREND_KEYS = [
+  "mood_score",
+  "energy_score",
+  "anxiety_score",
+  "sleep_hours",
+  "sleep_quality",
+  "weight_kg",
+  "body_fat_pct",
+  "focus_score",
+  "stress_score",
+] as const;
 
-const CORR_X = [
-  { value: "sleep_quality", label: "Sleep quality" },
-  { value: "sleep_hours", label: "Sleep hours" },
-  { value: "energy_score", label: "Energy" },
-];
-const CORR_Y = [
-  { value: "mood_score", label: "Mood" },
-  { value: "anxiety_score", label: "Anxiety" },
-  { value: "stress_score", label: "Stress" },
-];
+const CORR_X_KEYS = ["sleep_quality", "sleep_hours", "energy_score"] as const;
+const CORR_Y_KEYS = ["mood_score", "anxiety_score", "stress_score"] as const;
 
 export default function AnalyticsPage() {
   const { token } = useAuth();
-  const [period, setPeriod] = useState<(typeof PERIODS)[number]["id"]>("30d");
+  const { t } = useLocale();
+  const [period, setPeriod] = useState<(typeof PERIODS)[number]>("30d");
   const [metric, setMetric] = useState("mood_score");
   const [corrX, setCorrX] = useState("sleep_quality");
   const [corrY, setCorrY] = useState("mood_score");
+
+  const metricName = metricLabel(t, metric);
+  const xName = metricLabel(t, corrX);
+  const yName = metricLabel(t, corrY);
 
   const trendsQuery = useQuery({
     queryKey: ["analytics", "trends", token, period, metric],
@@ -79,39 +73,37 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Server-side aggregates on open metrics only — no ciphertext is read.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.analyticsTitle}</h1>
+        <p className="text-sm text-zinc-400 mt-1">{t.analyticsHint}</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-zinc-500">Period</span>
+        <span className="text-xs text-zinc-500">{t.period}</span>
         {PERIODS.map((p) => (
           <button
-            key={p.id}
+            key={p}
             type="button"
-            onClick={() => setPeriod(p.id)}
+            onClick={() => setPeriod(p)}
             className={`px-2 py-1 rounded text-xs ${
-              period === p.id ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-300"
+              period === p ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-300"
             }`}
           >
-            {p.label}
+            {p}
           </button>
         ))}
       </div>
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-medium text-zinc-200">Trend</h2>
+          <h2 className="text-sm font-medium text-zinc-200">{t.trend}</h2>
           <select
             value={metric}
             onChange={(e) => setMetric(e.target.value)}
             className="text-sm rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
           >
-            {TREND_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
+            {TREND_KEYS.map((value) => (
+              <option key={value} value={value}>
+                {metricLabel(t, value)}
               </option>
             ))}
           </select>
@@ -120,10 +112,10 @@ export default function AnalyticsPage() {
           <p className="text-xs text-rose-400">{(trendsQuery.error as Error).message}</p>
         )}
         {trendsQuery.isLoading ? (
-          <div className="h-56 flex items-center justify-center text-sm text-zinc-500">Loading…</div>
+          <div className="h-56 flex items-center justify-center text-sm text-zinc-500">{t.loading}</div>
         ) : trendChartData.length === 0 ? (
           <div className="h-56 flex items-center justify-center text-sm text-zinc-500">
-            No points in this range for the selected metric.
+            {t.noMetricPoints}
           </div>
         ) : (
           <div className="h-56">
@@ -139,7 +131,7 @@ export default function AnalyticsPage() {
                     borderRadius: 6,
                     fontSize: 12,
                   }}
-                  formatter={(v: number) => [v.toFixed(2), metric]}
+                  formatter={(v: number) => [v.toFixed(2), metricName]}
                   labelFormatter={(_label, payload) =>
                     payload?.[0]?.payload?.day != null ? String(payload[0].payload.day) : ""
                   }
@@ -150,7 +142,7 @@ export default function AnalyticsPage() {
                   stroke="#6366f1"
                   strokeWidth={2}
                   dot={false}
-                  name={metric}
+                  name={metricName}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -159,28 +151,28 @@ export default function AnalyticsPage() {
       </section>
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-        <h2 className="text-sm font-medium text-zinc-200">Correlation (same UTC day)</h2>
+        <h2 className="text-sm font-medium text-zinc-200">{t.correlation}</h2>
         <div className="flex flex-wrap gap-2 items-center text-sm">
           <select
             value={corrX}
             onChange={(e) => setCorrX(e.target.value)}
             className="rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
           >
-            {CORR_X.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
+            {CORR_X_KEYS.map((value) => (
+              <option key={value} value={value}>
+                {metricLabel(t, value)}
               </option>
             ))}
           </select>
-          <span className="text-zinc-500">vs</span>
+          <span className="text-zinc-500">{t.vs}</span>
           <select
             value={corrY}
             onChange={(e) => setCorrY(e.target.value)}
             className="rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
           >
-            {CORR_Y.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
+            {CORR_Y_KEYS.map((value) => (
+              <option key={value} value={value}>
+                {metricLabel(t, value)}
               </option>
             ))}
           </select>
@@ -189,18 +181,18 @@ export default function AnalyticsPage() {
           <p className="text-xs text-rose-400">{(corrQuery.error as Error).message}</p>
         )}
         {corrQuery.isLoading ? (
-          <div className="h-64 flex items-center justify-center text-sm text-zinc-500">Loading…</div>
+          <div className="h-64 flex items-center justify-center text-sm text-zinc-500">{t.loading}</div>
         ) : scatterData.length === 0 ? (
           <div className="h-64 flex items-center justify-center text-sm text-zinc-500">
-            Need overlapping days with both metrics logged.
+            {t.needOverlap}
           </div>
         ) : (
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis type="number" dataKey="x" name={corrX} stroke="#71717a" fontSize={11} />
-                <YAxis type="number" dataKey="y" name={corrY} stroke="#71717a" fontSize={11} />
+                <XAxis type="number" dataKey="x" name={xName} stroke="#71717a" fontSize={11} />
+                <YAxis type="number" dataKey="y" name={yName} stroke="#71717a" fontSize={11} />
                 <Tooltip
                   cursor={{ strokeDasharray: "3 3" }}
                   contentStyle={{
@@ -214,7 +206,7 @@ export default function AnalyticsPage() {
                     p?.[0]?.payload?.day != null ? String(p[0].payload.day) : ""
                   }
                 />
-                <Scatter name="days" data={scatterData} fill="#a78bfa" />
+                <Scatter name={t.days} data={scatterData} fill="#a78bfa" />
               </ScatterChart>
             </ResponsiveContainer>
           </div>

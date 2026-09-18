@@ -22,24 +22,39 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lifelog_backend
-    restart: unless-stopped
+    restart: on-failure
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lifelog:lifelog@postgres:5432/lifelog}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
       PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-100000}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command:
+      - sh
+      - -c
+      - |
+        echo "waiting for postgres DNS…"
+        i=0
+        until getent hosts postgres >/dev/null 2>&1; do
+          i=$$((i+1))
+          if [ $$i -gt 30 ]; then
+            echo "postgres hostname never resolved"
+            exit 1
+          fi
+          sleep 1
+        done
+        alembic upgrade head
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
@@ -48,7 +63,10 @@ services:
     container_name: lifelog_frontend
     restart: unless-stopped
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      # Same-origin `/api` via Vite proxy. Do not point at host :8000 —
+      # that port is frequently another FastAPI app (405 on register).
+      VITE_API_URL: ${VITE_API_URL:-}
+      VITE_API_PROXY: http://backend:8000
     ports:
       - "5173:5173"
     volumes:

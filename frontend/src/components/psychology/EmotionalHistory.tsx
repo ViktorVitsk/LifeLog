@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import type { MergedEntry } from "../../hooks/useEntries";
 import { useDecryptedEntries } from "../../hooks/useDecryptedEntries";
+import { dateLocale } from "../../i18n/locale";
+import type { TStrings } from "../../i18n/strings";
 
 interface EmotionalPayload {
   v?: number;
@@ -13,13 +16,6 @@ interface EmotionalPayload {
   cognitive_distortion?: string;
 }
 
-/**
- * List of recent EMOTIONAL_STATE entries.
- *
- * Design: scores are always visible (open fields, zero-cost). The full
- * gap-model breakdown is encrypted — we decrypt lazily on click so the
- * page stays fast and no decrypt happens unless the user asks for it.
- */
 export default function EmotionalHistory({
   entries,
   limit = 15,
@@ -28,6 +24,8 @@ export default function EmotionalHistory({
   limit?: number;
 }) {
   const { kek } = useAuth();
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const items = useMemo(
@@ -35,8 +33,6 @@ export default function EmotionalHistory({
     [entries, limit],
   );
 
-  // Only decrypt the currently-expanded row — plus whatever we've expanded
-  // earlier in the session (the hook caches by id).
   const target = useMemo(
     () => (openId ? items.filter((e) => e.id === openId) : []),
     [openId, items],
@@ -46,16 +42,12 @@ export default function EmotionalHistory({
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-sm font-medium text-zinc-200">Emotional history</h3>
-        <span className="text-[11px] text-zinc-500">
-          scores open · text decrypted on click
-        </span>
+        <h3 className="text-sm font-medium text-zinc-200">{t.emotionalHistory}</h3>
+        <span className="text-[11px] text-zinc-500">{t.scoresOpen}</span>
       </div>
 
       {items.length === 0 ? (
-        <div className="text-sm text-zinc-500 py-6 text-center">
-          No emotional state entries yet.
-        </div>
+        <div className="text-sm text-zinc-500 py-6 text-center">{t.noEmotionYet}</div>
       ) : (
         <ul className="divide-y divide-zinc-800">
           {items.map((e) => {
@@ -70,26 +62,26 @@ export default function EmotionalHistory({
                   className="w-full flex items-center gap-3 text-left"
                 >
                   <span className="text-xs text-zinc-500 w-28 shrink-0 tabular-nums">
-                    {formatTs(e.timestamp)}
+                    {formatTs(e.timestamp, loc)}
                   </span>
                   <ScoreRow entry={e} />
                   <span className="ml-auto text-[11px] text-zinc-500">
-                    {isOpen ? "hide" : "show"}
+                    {isOpen ? t.hide : t.show}
                   </span>
                 </button>
 
                 {isOpen && (
                   <div className="mt-2 pl-28 pr-2 text-sm">
                     {!kek ? (
-                      <div className="text-zinc-500 text-xs">
-                        Unlock required to decrypt this entry.
-                      </div>
+                      <div className="text-zinc-500 text-xs">{t.unlockToDecrypt}</div>
                     ) : pending && !payload ? (
-                      <div className="text-zinc-500 text-xs">Decrypting…</div>
+                      <div className="text-zinc-500 text-xs">{t.decrypting}</div>
                     ) : err ? (
-                      <div className="text-rose-300 text-xs">Decrypt error: {err}</div>
+                      <div className="text-rose-300 text-xs">
+                        {t.decryptFailed}: {err}
+                      </div>
                     ) : payload ? (
-                      <PayloadView payload={payload} />
+                      <PayloadView payload={payload} t={t} />
                     ) : null}
                   </div>
                 )}
@@ -133,7 +125,7 @@ function ScoreRow({ entry }: { entry: MergedEntry }) {
   );
 }
 
-function PayloadView({ payload }: { payload: EmotionalPayload }) {
+function PayloadView({ payload, t }: { payload: EmotionalPayload; t: TStrings }) {
   const hasAny =
     payload.resentment ||
     payload.guilt ||
@@ -142,43 +134,43 @@ function PayloadView({ payload }: { payload: EmotionalPayload }) {
     payload.reflection ||
     payload.cognitive_distortion;
   if (!hasAny) {
-    return <div className="text-zinc-500 text-xs">(no text for this entry)</div>;
+    return <div className="text-zinc-500 text-xs">{t.noText}</div>;
   }
   return (
     <div className="space-y-2">
       {payload.resentment && (
-        <Section title="Resentment" tint="text-rose-300">
-          <Kv k="Expected" v={payload.resentment.expectation} />
-          <Kv k="Reality" v={payload.resentment.reality} />
-          <Kv k="Trigger" v={payload.resentment.trigger} />
+        <Section title={t.resentment} tint="text-rose-300">
+          <Kv k={t.expected} v={payload.resentment.expectation} />
+          <Kv k={t.reality} v={payload.resentment.reality} />
+          <Kv k={t.trigger} v={payload.resentment.trigger} />
         </Section>
       )}
       {payload.guilt && (
-        <Section title="Guilt" tint="text-amber-300">
-          <Kv k="My action" v={payload.guilt.my_action} />
-          <Kv k="Perceived expectation" v={payload.guilt.perceived_expectation} />
+        <Section title={t.guilt} tint="text-amber-300">
+          <Kv k={t.myAction} v={payload.guilt.my_action} />
+          <Kv k={t.perceivedExpectation} v={payload.guilt.perceived_expectation} />
         </Section>
       )}
       {payload.shame && (
-        <Section title="Shame" tint="text-fuchsia-300">
-          <Kv k="Action" v={payload.shame.action} />
-          <Kv k="Ideal self" v={payload.shame.ideal_self} />
+        <Section title={t.shame} tint="text-fuchsia-300">
+          <Kv k={t.action} v={payload.shame.action} />
+          <Kv k={t.idealSelf} v={payload.shame.ideal_self} />
         </Section>
       )}
       {payload.fear && (
-        <Section title="Fear" tint="text-sky-300">
-          <Kv k="Threat" v={payload.fear.threat} />
-          <Kv k="Missing resource" v={payload.fear.missing_solution} />
+        <Section title={t.fear} tint="text-sky-300">
+          <Kv k={t.threat} v={payload.fear.threat} />
+          <Kv k={t.missingResource} v={payload.fear.missing_solution} />
         </Section>
       )}
       {payload.reflection && (
-        <Section title="Reflection" tint="text-emerald-300">
+        <Section title={t.reflection} tint="text-emerald-300">
           <div className="text-zinc-300 whitespace-pre-wrap">{payload.reflection}</div>
         </Section>
       )}
       {payload.cognitive_distortion && (
         <div className="text-xs text-zinc-400">
-          Distortion: <span className="text-zinc-200">{payload.cognitive_distortion}</span>
+          {t.distortion}: <span className="text-zinc-200">{payload.cognitive_distortion}</span>
         </div>
       )}
     </div>
@@ -212,9 +204,9 @@ function Kv({ k, v }: { k: string; v?: string }) {
   );
 }
 
-function formatTs(ts: string) {
+function formatTs(ts: string, loc: string) {
   const d = new Date(ts);
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(loc, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

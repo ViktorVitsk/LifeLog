@@ -23,7 +23,10 @@ class Settings(BaseSettings):
 
     pbkdf2_iterations: int = Field(default=100_000, alias="PBKDF2_ITERATIONS")
 
-    cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
+    cors_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        alias="CORS_ORIGINS",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:

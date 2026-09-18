@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth, WrongPasswordError } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
 
 /**
  * Modal shown after a same-tab refresh: the JWT and the user's salt are
@@ -9,6 +10,7 @@ import { useAuth, WrongPasswordError } from "../context/AuthContext";
  */
 export default function UnlockOverlay() {
   const { username, unlock, logout } = useAuth();
+  const { t } = useLocale();
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +25,7 @@ export default function UnlockOverlay() {
       setPassword("");
     } catch (e) {
       if (e instanceof WrongPasswordError) {
-        setError("Wrong password.");
+        setError(t.wrongPassword);
       } else {
         setError((e as Error).message);
       }
@@ -43,15 +45,11 @@ export default function UnlockOverlay() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
       >
         <div>
-          <h2 className="text-lg font-semibold">Re-enter master password</h2>
-          <p className="text-sm text-zinc-400 mt-1">
-            Your session is still valid, but the encryption key lives only in
-            memory and was lost on refresh. Type your master password to
-            re-derive it.
-          </p>
+          <h2 className="text-lg font-semibold">{t.unlockTitle}</h2>
+          <p className="text-sm text-zinc-400 mt-1">{t.unlockBody}</p>
           {username && (
             <p className="text-xs text-zinc-500 mt-2">
-              Logged in as <span className="text-zinc-300">{username}</span>.
+              {t.unlockLoggedIn} <span className="text-zinc-300">{username}</span>.
             </p>
           )}
         </div>
@@ -61,7 +59,7 @@ export default function UnlockOverlay() {
           className="w-full rounded bg-zinc-950 border border-zinc-700 px-3 py-2"
           type="password"
           autoComplete="current-password"
-          placeholder="master password"
+          placeholder={t.masterPassword}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
@@ -78,20 +76,16 @@ export default function UnlockOverlay() {
             disabled={busy || password.length < 8}
             className="flex-1 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
           >
-            {busy ? "Unlocking…" : "Unlock"}
+            {busy ? "…" : t.unlockSubmit}
           </button>
           <button
             type="button"
             onClick={logout}
             className="px-3 py-2 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
           >
-            Sign out
+            {t.logout}
           </button>
         </div>
-
-        <p className="text-[11px] text-zinc-500 text-center">
-          This happens locally. The password never leaves your browser.
-        </p>
       </form>
     </div>
   );

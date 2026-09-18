@@ -30,8 +30,37 @@ export interface PendingEntry extends EntrySyncPayload {
   attempts: number;
 }
 
+/** Encrypted chat turn (Phase 6). Plaintext never persisted. */
+export interface StoredChatTurn {
+  id: string;
+  day: string;
+  created_at: number;
+  encrypted_content: string;
+  encrypted_dek: string;
+}
+
+export interface StoredLlmSettings {
+  id: "default";
+  provider: "openrouter" | "ollama";
+  model: string;
+  base_url: string;
+  context_policy: "today" | "7d_open" | "decrypt_n";
+  decrypt_n: number;
+  encrypted_api_key?: string;
+  encrypted_api_key_dek?: string;
+}
+
+export interface StoredPinnedChart {
+  id: string;
+  created_at: number;
+  spec_json: string;
+}
+
 export class LifeLogDB extends Dexie {
   entries!: EntityTable<PendingEntry, "id">;
+  chat_turns!: EntityTable<StoredChatTurn, "id">;
+  llm_settings!: EntityTable<StoredLlmSettings, "id">;
+  pinned_charts!: EntityTable<StoredPinnedChart, "id">;
 
   constructor() {
     super("lifelog");
@@ -39,8 +68,13 @@ export class LifeLogDB extends Dexie {
       entries: "id, status, entry_type, timestamp, queued_at",
     });
     this.version(2).stores({
-      entries:
-        "id, status, entry_type, timestamp, queued_at, skill_id, habit_id",
+      entries: "id, status, entry_type, timestamp, queued_at, skill_id, habit_id",
+    });
+    this.version(3).stores({
+      entries: "id, status, entry_type, timestamp, queued_at, skill_id, habit_id",
+      chat_turns: "id, day, created_at",
+      llm_settings: "id",
+      pinned_charts: "id, created_at",
     });
   }
 }
@@ -104,4 +138,10 @@ export async function pruneSynced(olderThanMs: number): Promise<number> {
     .equals("synced")
     .and((e) => e.queued_at < cutoff)
     .delete();
+}
+
+/** Undo a local queue row. Does not DELETE on the server if already synced. */
+export async function deleteLocalEntries(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db.entries.bulkDelete(ids);
 }

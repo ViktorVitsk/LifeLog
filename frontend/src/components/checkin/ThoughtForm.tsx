@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import Slider from "../ui/Slider";
 
 export default function ThoughtForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
   const [content, setContent] = useState("");
   const [mood, setMood] = useState(6);
   const [tagsRaw, setTagsRaw] = useState("");
@@ -39,19 +41,19 @@ export default function ThoughtForm({ onSubmitted }: { onSubmitted: () => void }
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-sm text-zinc-300">Thought (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.thoughtEncrypted}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-32"
-          placeholder="A free-form thought…"
+          placeholder={t.thoughtPlaceholder}
           value={content}
           onChange={(e) => setContent(e.target.value)}
         />
       </div>
 
-      <Slider label="Mood when writing" value={mood} onChange={setMood} />
+      <Slider label={t.moodWhenWriting} value={mood} onChange={setMood} />
 
       <div>
-        <label className="text-sm text-zinc-300">Tags (open, comma-separated)</label>
+        <label className="text-sm text-zinc-300">{t.tagsOpen}</label>
         <input
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
           placeholder="work, family, reflection"
@@ -59,7 +61,7 @@ export default function ThoughtForm({ onSubmitted }: { onSubmitted: () => void }
           onChange={(e) => setTagsRaw(e.target.value)}
         />
         <div className="text-[11px] text-zinc-500 mt-1">
-          Tags stay unencrypted so they can be used for filtering and analytics.
+          {t.tagsStayOpen}
         </div>
       </div>
 
@@ -74,7 +76,7 @@ export default function ThoughtForm({ onSubmitted }: { onSubmitted: () => void }
         disabled={busy || !content.trim()}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save thought"}
+        {busy ? "…" : t.saveThought}
       </button>
     </div>
   );

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
 import HabitHeatmap from "../components/habits/HabitHeatmap";
 import HabitLogHistory from "../components/habits/HabitLogHistory";
 import { useEntries } from "../hooks/useEntries";
@@ -8,6 +9,7 @@ import { api, isNetworkError, type Habit, type HabitFrequency } from "../lib/api
 
 export default function HabitsPage() {
   const { token } = useAuth();
+  const { t } = useLocale();
   const qc = useQueryClient();
   const { entries } = useEntries();
 
@@ -30,15 +32,13 @@ export default function HabitsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Habits</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Track habits and see a completion heatmap. Log from Check-in · Habit.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.habitsTitle}</h1>
+        <p className="text-sm text-zinc-400 mt-1">{t.habitsHint}</p>
       </div>
 
       {offline ? (
         <div className="rounded border border-zinc-700 bg-zinc-900/50 text-zinc-300 text-xs p-2">
-          Offline — habit list may be stale.
+          {t.offlineHabits}
         </div>
       ) : rawErr ? (
         <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
@@ -57,11 +57,11 @@ export default function HabitsPage() {
             }}
           />
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-sm font-medium text-zinc-200 mb-2">Your habits</h2>
+            <h2 className="text-sm font-medium text-zinc-200 mb-2">{t.yourHabits}</h2>
             {habitsQuery.isLoading ? (
-              <p className="text-sm text-zinc-500">Loading…</p>
+              <p className="text-sm text-zinc-500">{t.loading}</p>
             ) : habits.length === 0 ? (
-              <p className="text-sm text-zinc-500">No habits yet.</p>
+              <p className="text-sm text-zinc-500">{t.noHabits}</p>
             ) : (
               <ul className="space-y-1">
                 {habits.map((h) => (
@@ -80,7 +80,9 @@ export default function HabitsPage() {
                         style={{ background: h.color || "#10b981" }}
                       />
                       <span className="flex-1 truncate">{h.name}</span>
-                      <span className="text-[10px] text-zinc-500">{h.frequency}</span>
+                      <span className="text-[10px] text-zinc-500">
+                        {h.frequency === "weekly" ? t.freqWeekly : t.freqDaily}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -95,7 +97,7 @@ export default function HabitsPage() {
                       }}
                       className="text-[10px] px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800 shrink-0"
                     >
-                      {h.is_active ? "off" : "on"}
+                      {h.is_active ? t.off : t.on}
                     </button>
                   </li>
                 ))}
@@ -111,7 +113,7 @@ export default function HabitsPage() {
               <HabitLogHistory entries={entries} habitId={habitIdForHeatmap} />
             </>
           ) : (
-            <p className="text-sm text-zinc-500">Create a habit to see the heatmap.</p>
+            <p className="text-sm text-zinc-500">{t.createHabitToSee}</p>
           )}
         </div>
       </div>
@@ -128,6 +130,7 @@ function CreateHabitForm({
   disabled: boolean;
   onCreated: (h: Habit) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState("");
   const [frequency, setFrequency] = useState<HabitFrequency>("daily");
   const [target, setTarget] = useState("");
@@ -141,8 +144,7 @@ function CreateHabitForm({
     setBusy(true);
     setErr(null);
     try {
-      const tv =
-        target.trim() === "" ? null : Number(target);
+      const tv = target.trim() === "" ? null : Number(target);
       const h = await api.createHabit(token, {
         name: name.trim(),
         frequency,
@@ -163,27 +165,27 @@ function CreateHabitForm({
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-      <h2 className="text-sm font-medium text-zinc-200">New habit</h2>
+      <h2 className="text-sm font-medium text-zinc-200">{t.newHabit}</h2>
       <input
         className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm"
-        placeholder="Name"
+        placeholder={t.name}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
       <label className="block text-xs text-zinc-400">
-        Frequency
+        {t.frequency}
         <select
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm"
           value={frequency}
           onChange={(e) => setFrequency(e.target.value as HabitFrequency)}
         >
-          <option value="daily">daily</option>
-          <option value="weekly">weekly</option>
+          <option value="daily">{t.freqDaily}</option>
+          <option value="weekly">{t.freqWeekly}</option>
         </select>
       </label>
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs text-zinc-400">
-          Target (optional)
+          {t.targetOptional}
           <input
             type="number"
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-sm"
@@ -192,17 +194,17 @@ function CreateHabitForm({
           />
         </label>
         <label className="text-xs text-zinc-400">
-          Unit
+          {t.unit}
           <input
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-sm"
-            placeholder="e.g. min, pages"
+            placeholder={t.unitPlaceholder}
             value={unit}
             onChange={(e) => setUnit(e.target.value)}
           />
         </label>
       </div>
       <label className="flex items-center gap-2 text-xs text-zinc-400">
-        Color
+        {t.color}
         <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
       </label>
       {err && <div className="text-xs text-rose-300">{err}</div>}
@@ -212,7 +214,7 @@ function CreateHabitForm({
         onClick={submit}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm"
       >
-        {busy ? "…" : "Create habit"}
+        {busy ? "…" : t.createHabit}
       </button>
     </div>
   );

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { api } from "../../lib/api";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 
 export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek, token } = useAuth();
+  const { t } = useLocale();
   const habitsQuery = useQuery({
     queryKey: ["habits", token],
     enabled: Boolean(token),
@@ -61,12 +63,12 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
   }
 
   if (habitsQuery.isLoading) {
-    return <div className="text-sm text-zinc-500">Loading habits…</div>;
+    return <div className="text-sm text-zinc-500">{t.loadingHabits}</div>;
   }
   if (habits.length === 0) {
     return (
       <div className="text-sm text-zinc-400">
-        No active habits yet. Create one under Habits first.
+        {t.noActiveHabits}
       </div>
     );
   }
@@ -74,7 +76,7 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
   return (
     <div className="space-y-4">
       <label className="block">
-        <span className="text-sm text-zinc-300">Habit</span>
+        <span className="text-sm text-zinc-300">{t.habit}</span>
         <select
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
           value={habitId}
@@ -95,18 +97,22 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
           checked={completed}
           onChange={(e) => setCompleted(e.target.checked)}
         />
-        Completed today
+        {t.completedToday}
       </label>
 
       {habit && (habit.target_value != null || (habit.unit && habit.unit.trim().length > 0)) ? (
         <label className="block">
           <span className="text-sm text-zinc-300">
-            Value {habit.unit ? `(${habit.unit})` : ""}
+            {t.value} {habit.unit ? `(${habit.unit})` : ""}
           </span>
           <input
             type="number"
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
-            placeholder={`Target ~ ${habit.target_value}`}
+            placeholder={
+              habit.target_value != null
+                ? t.targetApprox.replace("{n}", String(habit.target_value))
+                : ""
+            }
             value={value}
             onChange={(e) => {
               const v = e.target.value;
@@ -117,10 +123,10 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
       ) : null}
 
       <div>
-        <label className="text-sm text-zinc-300">Notes (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.notesEncrypted}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
-          placeholder="Optional context"
+          placeholder={t.optionalContext}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
@@ -137,7 +143,7 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
         disabled={busy || !habitId}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Log habit"}
+        {busy ? "…" : t.logHabit}
       </button>
     </div>
   );

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useLocale } from "../../context/LocaleContext";
+import type { TStrings } from "../../i18n/strings";
 import type { MetricField, MetricFieldType, MetricSchema } from "../../lib/metricSchema";
 
 interface Props {
@@ -8,8 +10,8 @@ interface Props {
 
 const TYPES: MetricFieldType[] = ["slider", "number", "text", "select"];
 
-/** Simple UI to edit `metric_schema.fields` when creating or updating a skill. */
 export default function MetricSchemaBuilder({ schema, onChange }: Props) {
+  const { t } = useLocale();
   const fields = schema.fields;
 
   function updateField(i: number, patch: Partial<MetricField>) {
@@ -29,7 +31,7 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
     const key = `metric_${fields.length + 1}`;
     const f: MetricField = {
       key,
-      label: "New metric",
+      label: t.newMetric,
       type: "slider",
       min: 1,
       max: 10,
@@ -40,25 +42,25 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-zinc-500 uppercase tracking-wide">Metric schema</span>
+        <span className="text-xs text-zinc-500 uppercase tracking-wide">{t.metricSchema}</span>
         <button
           type="button"
           onClick={addField}
           className="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800"
         >
-          + Add field
+          {t.addField}
         </button>
       </div>
 
       {fields.length === 0 ? (
-        <p className="text-xs text-zinc-500">No custom metrics — session form will only ask for notes.</p>
+        <p className="text-xs text-zinc-500">{t.noCustomMetrics}</p>
       ) : (
         <ul className="space-y-2">
           {fields.map((f, i) => (
             <li key={i} className="rounded border border-zinc-800 p-2 space-y-2">
               <div className="flex flex-wrap gap-2 items-end">
                 <label className="text-xs">
-                  <span className="text-zinc-500">key</span>
+                  <span className="text-zinc-500">{t.fieldKey}</span>
                   <input
                     className="block mt-0.5 w-28 rounded bg-zinc-900 border border-zinc-700 px-2 py-1 font-mono text-xs"
                     value={f.key}
@@ -66,7 +68,7 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
                   />
                 </label>
                 <label className="text-xs flex-1 min-w-[120px]">
-                  <span className="text-zinc-500">label</span>
+                  <span className="text-zinc-500">{t.fieldLabel}</span>
                   <input
                     className="block mt-0.5 w-full rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-xs"
                     value={f.label}
@@ -74,30 +76,30 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
                   />
                 </label>
                 <label className="text-xs">
-                  <span className="text-zinc-500">type</span>
+                  <span className="text-zinc-500">{t.fieldType}</span>
                   <select
                     className="block mt-0.5 rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-xs"
                     value={f.type}
                     onChange={(e) => {
-                      const t = e.target.value as MetricFieldType;
+                      const nextType = e.target.value as MetricFieldType;
                       const base = { key: f.key, label: f.label };
-                      if (t === "slider")
+                      if (nextType === "slider")
                         replaceField(i, { ...base, type: "slider", min: 1, max: 10 });
-                      else if (t === "number")
+                      else if (nextType === "number")
                         replaceField(i, { ...base, type: "number", min: 0, max: 9999 });
-                      else if (t === "text")
+                      else if (nextType === "text")
                         replaceField(i, { ...base, type: "text", multiline: false });
                       else
                         replaceField(i, {
                           ...base,
                           type: "select",
-                          options: [{ value: "a", label: "Option A" }],
+                          options: [{ value: "a", label: "A" }],
                         });
                     }}
                   >
-                    {TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
+                    {TYPES.map((typ) => (
+                      <option key={typ} value={typ}>
+                        {typ}
                       </option>
                     ))}
                   </select>
@@ -107,13 +109,13 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
                   onClick={() => removeField(i)}
                   className="text-xs text-rose-400 hover:underline mb-0.5"
                 >
-                  remove
+                  {t.remove}
                 </button>
               </div>
               {f.type === "slider" || f.type === "number" ? (
                 <div className="flex gap-2 text-xs">
                   <label>
-                    min
+                    {t.min}
                     <input
                       type="number"
                       className="block w-16 mt-0.5 rounded bg-zinc-900 border border-zinc-700 px-1"
@@ -122,7 +124,7 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
                     />
                   </label>
                   <label>
-                    max
+                    {t.max}
                     <input
                       type="number"
                       className="block w-16 mt-0.5 rounded bg-zinc-900 border border-zinc-700 px-1"
@@ -139,10 +141,12 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
                     checked={Boolean(f.multiline)}
                     onChange={(e) => updateField(i, { multiline: e.target.checked })}
                   />
-                  multiline
+                  {t.multiline}
                 </label>
               ) : null}
-              {f.type === "select" ? <SelectOptionsEditor field={f} onChange={(opts) => updateField(i, { options: opts })} /> : null}
+              {f.type === "select" ? (
+                <SelectOptionsEditor field={f} onChange={(opts) => updateField(i, { options: opts })} t={t} />
+              ) : null}
             </li>
           ))}
         </ul>
@@ -154,14 +158,16 @@ export default function MetricSchemaBuilder({ schema, onChange }: Props) {
 function SelectOptionsEditor({
   field,
   onChange,
+  t,
 }: {
   field: Extract<MetricField, { type: "select" }>;
   onChange: (opts: { value: string; label?: string }[]) => void;
+  t: TStrings;
 }) {
   const [draft, setDraft] = useState("");
   return (
     <div className="text-xs space-y-1">
-      <div className="text-zinc-500">options (value|label per line)</div>
+      <div className="text-zinc-500">{t.optionsHint}</div>
       <textarea
         className="w-full rounded bg-zinc-900 border border-zinc-700 px-2 py-1 font-mono h-16"
         value={field.options.map((o) => (o.label ? `${o.value}|${o.label}` : o.value)).join("\n")}
@@ -182,7 +188,7 @@ function SelectOptionsEditor({
       <div className="flex gap-1">
         <input
           className="flex-1 rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
-          placeholder="quick add value"
+          placeholder={t.quickAdd}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
@@ -195,7 +201,7 @@ function SelectOptionsEditor({
             setDraft("");
           }}
         >
-          add
+          {t.add}
         </button>
       </div>
     </div>

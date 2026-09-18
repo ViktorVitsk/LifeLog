@@ -1,31 +1,36 @@
 import { useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
 import { useEntries, type MergedEntry } from "../hooks/useEntries";
+import { dateLocale } from "../i18n/locale";
+import { entryTypeLabel } from "../i18n/strings";
 import { decryptEntry } from "../lib/crypto";
 
 const JOURNAL_TYPES = new Set(["THOUGHT", "GRATITUDE", "EMOTIONAL_STATE"]);
 
 export default function JournalPage() {
   const { kek } = useAuth();
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
   const { entries, isLoading } = useEntries();
   const [tagFilter, setTagFilter] = useState("");
   const [preview, setPreview] = useState<{ title: string; body: string } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
-    const t = tagFilter.trim().toLowerCase();
+    const q = tagFilter.trim().toLowerCase();
     return entries.filter((e) => {
       if (!JOURNAL_TYPES.has(e.entry_type)) return false;
-      if (!t) return true;
-      return (e.tags ?? []).some((tag) => tag.toLowerCase().includes(t));
+      if (!q) return true;
+      return (e.tags ?? []).some((tag) => tag.toLowerCase().includes(q));
     });
   }, [entries, tagFilter]);
 
   async function openEntry(e: MergedEntry) {
     if (!kek) {
       setPreview({
-        title: "Unlock required",
-        body: "Re-enter your master password (refresh flow) to decrypt this entry.",
+        title: t.unlockRequired,
+        body: t.unlockToDecrypt,
       });
       return;
     }
@@ -34,13 +39,13 @@ export default function JournalPage() {
       const raw = await decryptEntry(e.encrypted_content, e.encrypted_dek, kek);
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       setPreview({
-        title: `${e.entry_type} · ${new Date(e.timestamp).toLocaleString()}`,
+        title: `${entryTypeLabel(t, e.entry_type)} · ${new Date(e.timestamp).toLocaleString(loc)}`,
         body: JSON.stringify(parsed, null, 2),
       });
     } catch {
       setPreview({
-        title: "Decrypt failed",
-        body: "Wrong password after refresh, or corrupted ciphertext.",
+        title: t.decryptFailed,
+        body: t.decryptFailedBody,
       });
     } finally {
       setBusyId(null);
@@ -50,23 +55,21 @@ export default function JournalPage() {
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Journal</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Thoughts, gratitude, and emotional work — filter by tag substring (client-side).
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.timelineTitle}</h1>
+        <p className="text-sm text-zinc-400 mt-1">{t.timelineHint}</p>
       </div>
 
       <div>
-        <label className="text-sm text-zinc-300">Tag contains</label>
+        <label className="text-sm text-zinc-300">{t.tagContains}</label>
         <input
           value={tagFilter}
           onChange={(e) => setTagFilter(e.target.value)}
-          placeholder="e.g. work, morning"
+          placeholder={t.tagPlaceholder}
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm"
         />
       </div>
 
-      {isLoading && <p className="text-sm text-zinc-500">Loading entries…</p>}
+      {isLoading && <p className="text-sm text-zinc-500">{t.loadingEntries}</p>}
 
       <ul className="space-y-2">
         {filtered.map((e) => (
@@ -75,9 +78,9 @@ export default function JournalPage() {
             className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 flex flex-wrap items-center justify-between gap-2"
           >
             <div>
-              <div className="text-sm text-zinc-200">{e.entry_type}</div>
+              <div className="text-sm text-zinc-200">{entryTypeLabel(t, e.entry_type)}</div>
               <div className="text-xs text-zinc-500">
-                {new Date(e.timestamp).toLocaleString()}
+                {new Date(e.timestamp).toLocaleString(loc)}
                 {e.tags?.length ? ` · ${e.tags.join(", ")}` : ""}
               </div>
             </div>
@@ -87,21 +90,21 @@ export default function JournalPage() {
               onClick={() => void openEntry(e)}
               className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
             >
-              {busyId === e.id ? "…" : "Decrypt"}
+              {busyId === e.id ? "…" : t.decrypt}
             </button>
           </li>
         ))}
       </ul>
 
       {filtered.length === 0 && !isLoading && (
-        <p className="text-sm text-zinc-500">No matching journal entries yet.</p>
+        <p className="text-sm text-zinc-500">{t.noJournal}</p>
       )}
 
       {preview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <button
             type="button"
-            aria-label="Close preview"
+            aria-label={t.close}
             className="absolute inset-0 cursor-default bg-transparent"
             onClick={() => setPreview(null)}
           />
@@ -117,7 +120,7 @@ export default function JournalPage() {
                 className="text-zinc-400 hover:text-white text-xs"
                 onClick={() => setPreview(null)}
               >
-                Close
+                {t.close}
               </button>
             </div>
             <pre className="text-xs text-zinc-300 whitespace-pre-wrap font-mono">{preview.body}</pre>

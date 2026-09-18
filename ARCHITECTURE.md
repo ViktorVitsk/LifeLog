@@ -438,10 +438,14 @@ All other endpoints require `Authorization: Bearer <token>`.
 
 ## 9. Frontend Pages
 
-### `/checkin` — PRIMARY SCREEN (open this first, every day)
+### `/` and `/today` — PRIMARY SCREEN (Phase 6+)
+Today + chat: briefing from open metrics, conversation thread, sticky composer (text + voice).
+The agent proposes structured entries via client-side function calling; the user confirms cards (or auto-commits only when they explicitly asked to save). Manual forms remain at `/checkin` as fallback.
+
+### `/checkin` — manual forms (fallback)
 Dynamic form that changes based on selected entry_type.
 - Default: DAILY_CHECKIN with mood/energy sliders + quick notes
-- Type selector: Emotion | Skill | Habit | Gratitude | Sleep | Food | Thought
+- Type selector: Emotion | Skill | Habit | Gratitude | Sleep | Body | Thought
 - Each type shows its specific fields
 - Submit → encrypt → add to offline queue → sync
 
@@ -470,8 +474,15 @@ Dynamic form that changes based on selected entry_type.
 - Free-form thoughts, beliefs, goals
 - Search by tags and date (works on open metadata without decryption)
 
+### `/timeline`
+Former journal: thoughts / gratitude / emotional history with tag filter and on-demand decrypt.
+
+### `/insights`
+Tabs over Dashboard, Psychology, Skills, Habits, Analytics (open-metric graphs unchanged).
+
 ### `/settings`
-- Manage skills and habits
+- LLM provider (OpenRouter / Ollama), model, API key wrapped with KEK
+- Context policy for what the agent may decrypt into a prompt
 - Export data
 - Change master password (requires re-encryption of all DEKs)
 
@@ -526,6 +537,19 @@ Dynamic form that changes based on selected entry_type.
 - [ ] Sleep log
 - [ ] JSON export (client-side decrypt + assemble)
 - [ ] Search/filter by tags
+
+### Phase 6 — AI capture (Today + client-side agent)
+- [ ] Today is the home route: briefing (open metrics + gaps) + day thread + composer
+- [ ] Client-side OpenAI-compatible tool loop (browser → OpenRouter or host Ollama). LifeLog FastAPI never sees chat plaintext and never proxies the LLM.
+- [ ] API key stored in IndexedDB wrapped with the KEK (same AES-GCM as entries). Chat turns stored as ciphertext in Dexie (`chat_turns`), not on Postgres.
+- [ ] Tool profiles: cloud gets the full catalog; local 7B (GTX 1070 8GB, Q4, 4k–8k ctx) gets four tools — `get_today_snapshot`, `propose_entries`, `show_chart`, `search_entries`.
+- [ ] `propose_entries` returns confirm cards; `commit_entries` / user Save call existing `encryptAndEnqueue`. Do not invent numeric scores that were not in the utterance. Inferred scores never auto-commit.
+- [ ] Provenance in encrypted JSON: `provenance` (`user_stated` | `agent_extracted` | `agent_inferred`), `confidence`, `source_turn_id`, `user_confirmed`. Open tags may include `agent` / `confirmed`.
+- [ ] `show_chart` renders Recharts in the thread (trends, scatter, habit heatmap, skill bars) from open metrics / existing components.
+- [ ] Mobile-first shell: bottom tab bar (Today, Timeline, Insights, Settings), `viewport-fit=cover`, `100dvh`, `visualViewport` so the keyboard does not cover the composer, tap targets ≥ 44px.
+- [ ] `/checkin` remains as fallback when the model is unavailable.
+
+**E2EE invariant (unchanged):** the LifeLog server stores ciphertext + open numbers only. OpenRouter sees the current chat plus tool results the client chose to send. A local Ollama model sees that payload on-device only.
 
 ---
 

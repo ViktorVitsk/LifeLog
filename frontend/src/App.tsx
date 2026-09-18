@@ -3,26 +3,24 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
+import { LocaleProvider } from "./context/LocaleContext";
 import { isNetworkError } from "./lib/api";
+import AnalyticsPage from "./pages/AnalyticsPage";
 import CheckinPage from "./pages/CheckinPage";
 import DashboardPage from "./pages/DashboardPage";
-import LoginPage from "./pages/LoginPage";
-import AnalyticsPage from "./pages/AnalyticsPage";
 import HabitsPage from "./pages/HabitsPage";
+import InsightsPage from "./pages/InsightsPage";
 import JournalPage from "./pages/JournalPage";
+import LoginPage from "./pages/LoginPage";
 import PsychologyPage from "./pages/PsychologyPage";
 import SettingsPage from "./pages/SettingsPage";
 import SkillsPage from "./pages/SkillsPage";
+import TodayPage from "./pages/TodayPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Don't hammer the network when offline; don't retry on the kind of
-      // errors that won't get better within the next few ms.
       retry: (failureCount, error) => !isNetworkError(error) && failureCount < 1,
-      // `offlineFirst` = fire once, then serve cache while offline instead
-      // of pausing / throwing loudly. Dexie still provides pending rows,
-      // so the dashboard stays useful even with no server reachable.
       networkMode: "offlineFirst",
       refetchOnWindowFocus: false,
       refetchOnReconnect: true,
@@ -33,6 +31,7 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <LocaleProvider>
       <AuthProvider>
         <BrowserRouter>
           <Routes>
@@ -44,20 +43,30 @@ export default function App() {
                 </ProtectedRoute>
               }
             >
-              <Route index element={<Navigate to="/checkin" replace />} />
+              <Route index element={<TodayPage />} />
+              <Route path="/today" element={<TodayPage />} />
+              <Route path="/timeline" element={<JournalPage />} />
+              <Route path="/insights" element={<InsightsPage />}>
+                <Route index element={<DashboardPage />} />
+                <Route path="psychology" element={<PsychologyPage />} />
+                <Route path="skills" element={<SkillsPage />} />
+                <Route path="habits" element={<HabitsPage />} />
+                <Route path="analytics" element={<AnalyticsPage />} />
+              </Route>
               <Route path="/checkin" element={<CheckinPage />} />
-              <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/psychology" element={<PsychologyPage />} />
-              <Route path="/skills" element={<SkillsPage />} />
-              <Route path="/habits" element={<HabitsPage />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/journal" element={<JournalPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/dashboard" element={<Navigate to="/insights" replace />} />
+              <Route path="/psychology" element={<Navigate to="/insights/psychology" replace />} />
+              <Route path="/skills" element={<Navigate to="/insights/skills" replace />} />
+              <Route path="/habits" element={<Navigate to="/insights/habits" replace />} />
+              <Route path="/analytics" element={<Navigate to="/insights/analytics" replace />} />
+              <Route path="/journal" element={<Navigate to="/timeline" replace />} />
             </Route>
-            <Route path="*" element={<Navigate to="/checkin" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
+      </LocaleProvider>
     </QueryClientProvider>
   );
 }

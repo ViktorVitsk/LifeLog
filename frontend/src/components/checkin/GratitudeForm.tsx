@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 
 export default function GratitudeForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
   const [items, setItems] = useState<string[]>(["", "", ""]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -36,15 +38,13 @@ export default function GratitudeForm({ onSubmitted }: { onSubmitted: () => void
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-zinc-400">
-        Three specific things you're grateful for today. Stored encrypted.
-      </p>
+      <p className="text-sm text-zinc-400">{t.gratitudeHint}</p>
       <div className="space-y-2">
         {items.map((val, idx) => (
           <input
             key={idx}
             className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
-            placeholder={`${idx + 1}. Something specific…`}
+            placeholder={`${idx + 1}. ${t.somethingSpecific}`}
             value={val}
             onChange={(e) => updateItem(idx, e.target.value)}
           />
@@ -62,7 +62,7 @@ export default function GratitudeForm({ onSubmitted }: { onSubmitted: () => void
         disabled={busy || items.every((i) => !i.trim())}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save gratitude"}
+        {busy ? "…" : t.saveGratitude}
       </button>
     </div>
   );

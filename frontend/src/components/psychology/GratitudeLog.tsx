@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import type { MergedEntry } from "../../hooks/useEntries";
 import { useDecryptedEntries } from "../../hooks/useDecryptedEntries";
+import { dateLocale } from "../../i18n/locale";
 
 interface GratitudePayload {
   v?: number;
@@ -15,11 +17,6 @@ function extractItems(raw: GratitudePayload | undefined): string[] {
   return items.filter((x): x is string => typeof x === "string" && x.length > 0);
 }
 
-/**
- * Gratitude log — decrypts each recent gratitude entry eagerly so the user
- * can scan them as a list of items. Capped so we never decrypt hundreds of
- * entries on mount; the user can raise this limit later.
- */
 export default function GratitudeLog({
   entries,
   limit = 20,
@@ -28,6 +25,8 @@ export default function GratitudeLog({
   limit?: number;
 }) {
   const { kek } = useAuth();
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
 
   const items = useMemo(
     () => entries.filter((e) => e.entry_type === "GRATITUDE").slice(0, limit),
@@ -39,22 +38,18 @@ export default function GratitudeLog({
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-sm font-medium text-zinc-200">Gratitude log</h3>
+        <h3 className="text-sm font-medium text-zinc-200">{t.gratitudeLog}</h3>
         <span className="text-[11px] text-zinc-500">
-          decrypted in your browser · last {limit}
+          {t.decryptedLocal.replace("{n}", String(limit))}
         </span>
       </div>
 
       {!kek ? (
-        <div className="text-sm text-zinc-500 py-6 text-center">
-          Unlock required to decrypt gratitude entries.
-        </div>
+        <div className="text-sm text-zinc-500 py-6 text-center">{t.unlockRequired}</div>
       ) : items.length === 0 ? (
-        <div className="text-sm text-zinc-500 py-6 text-center">
-          No gratitude entries yet.
-        </div>
+        <div className="text-sm text-zinc-500 py-6 text-center">{t.noGratitude}</div>
       ) : pending && Object.keys(data).length === 0 ? (
-        <div className="text-sm text-zinc-500 py-6 text-center">Decrypting…</div>
+        <div className="text-sm text-zinc-500 py-6 text-center">{t.decrypting}</div>
       ) : (
         <ul className="space-y-3">
           {items.map((e) => {
@@ -64,10 +59,12 @@ export default function GratitudeLog({
             return (
               <li key={e.id}>
                 <div className="text-[11px] text-zinc-500 tabular-nums">
-                  {formatTs(e.timestamp)}
+                  {formatTs(e.timestamp, loc)}
                 </div>
                 {err ? (
-                  <div className="text-xs text-rose-300 mt-1">Decrypt failed: {err}</div>
+                  <div className="text-xs text-rose-300 mt-1">
+                    {t.decryptFailed}: {err}
+                  </div>
                 ) : lines.length > 0 ? (
                   <ul className="mt-1 space-y-0.5">
                     {lines.map((it, i) => (
@@ -79,7 +76,7 @@ export default function GratitudeLog({
                   </ul>
                 ) : (
                   <div className="text-xs text-zinc-500 mt-1">
-                    {pending ? "…" : "(empty — wrong password or corrupt entry)"}
+                    {pending ? "…" : t.emptyCorrupt}
                   </div>
                 )}
               </li>
@@ -91,9 +88,9 @@ export default function GratitudeLog({
   );
 }
 
-function formatTs(ts: string) {
+function formatTs(ts: string, loc: string) {
   const d = new Date(ts);
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(loc, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

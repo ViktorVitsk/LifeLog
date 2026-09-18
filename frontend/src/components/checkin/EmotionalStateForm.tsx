@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
+import { distortionLabel } from "../../i18n/strings";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import Slider from "../ui/Slider";
 
@@ -61,6 +63,7 @@ interface FearFields {
 
 export default function EmotionalStateForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek } = useAuth();
+  const { t } = useLocale();
 
   const [active, setActive] = useState<Record<EmotionKey, boolean>>({
     resentment: false,
@@ -146,99 +149,107 @@ export default function EmotionalStateForm({ onSubmitted }: { onSubmitted: () =>
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-zinc-400">
-        Gap model: name what you feel, find the gap. Enable only the emotions
-        that apply today. Only the 0–10 scores leave your device; all text is
-        encrypted.
-      </p>
+      <p className="text-sm text-zinc-400">{t.gapFormHint}</p>
 
       <EmotionCard
-        label="Resentment"
+        label={t.resentment}
         tint="rose"
-        hint="Expectation vs reality gap toward others"
+        hint={t.resentmentHint}
         enabled={active.resentment}
         onToggle={() => toggle("resentment")}
         score={scores.resentment}
         onScore={(v) => setScore("resentment", v)}
+        enableLabel={t.enableEmotion}
+        disableLabel={t.disableEmotion}
+        intensityLabel={t.intensity}
       >
         <Field
-          label="What I expected"
+          label={t.whatExpected}
           value={resentment.expectation}
           onChange={(v) => setResentment((x) => ({ ...x, expectation: v }))}
-          placeholder="What I expected from the other person"
+          placeholder={t.phExpected}
         />
         <Field
-          label="What actually happened"
+          label={t.whatHappened}
           value={resentment.reality}
           onChange={(v) => setResentment((x) => ({ ...x, reality: v }))}
-          placeholder="What they actually did or said"
+          placeholder={t.phHappened}
         />
         <Field
-          label="Specific trigger"
+          label={t.specificTrigger}
           value={resentment.trigger}
           onChange={(v) => setResentment((x) => ({ ...x, trigger: v }))}
-          placeholder="The exact moment it landed"
+          placeholder={t.phTrigger}
         />
       </EmotionCard>
 
       <EmotionCard
-        label="Guilt"
+        label={t.guilt}
         tint="amber"
-        hint="Gap between my action and what I think others expected"
+        hint={t.guiltHint}
         enabled={active.guilt}
         onToggle={() => toggle("guilt")}
         score={scores.guilt}
         onScore={(v) => setScore("guilt", v)}
+        enableLabel={t.enableEmotion}
+        disableLabel={t.disableEmotion}
+        intensityLabel={t.intensity}
       >
         <Field
-          label="What I did"
+          label={t.whatIDid}
           value={guilt.my_action}
           onChange={(v) => setGuilt((x) => ({ ...x, my_action: v }))}
         />
         <Field
-          label="What I think others expected"
+          label={t.whatOthersExpected}
           value={guilt.perceived_expectation}
           onChange={(v) => setGuilt((x) => ({ ...x, perceived_expectation: v }))}
         />
       </EmotionCard>
 
       <EmotionCard
-        label="Shame"
+        label={t.shame}
         tint="fuchsia"
-        hint="Gap between my action and my ideal self"
+        hint={t.shameHint}
         enabled={active.shame}
         onToggle={() => toggle("shame")}
         score={scores.shame}
         onScore={(v) => setScore("shame", v)}
+        enableLabel={t.enableEmotion}
+        disableLabel={t.disableEmotion}
+        intensityLabel={t.intensity}
       >
         <Field
-          label="What I did"
+          label={t.whatIDid}
           value={shame.action}
           onChange={(v) => setShame((x) => ({ ...x, action: v }))}
         />
         <Field
-          label="How my ideal self would act"
+          label={t.idealSelfWould}
           value={shame.ideal_self}
           onChange={(v) => setShame((x) => ({ ...x, ideal_self: v }))}
         />
       </EmotionCard>
 
       <EmotionCard
-        label="Fear"
+        label={t.fear}
         tint="sky"
-        hint="Gap between perceived threat and the resources I have"
+        hint={t.fearHint}
         enabled={active.fear}
         onToggle={() => toggle("fear")}
         score={scores.fear}
         onScore={(v) => setScore("fear", v)}
+        enableLabel={t.enableEmotion}
+        disableLabel={t.disableEmotion}
+        intensityLabel={t.intensity}
       >
         <Field
-          label="What threat I perceive"
+          label={t.threatIPerceive}
           value={fear.threat}
           onChange={(v) => setFear((x) => ({ ...x, threat: v }))}
         />
         <Field
-          label="What resource or solution I lack"
+          label={t.resourceILack}
           value={fear.missing_solution}
           onChange={(v) => setFear((x) => ({ ...x, missing_solution: v }))}
         />
@@ -246,16 +257,16 @@ export default function EmotionalStateForm({ onSubmitted }: { onSubmitted: () =>
 
       <div className="grid gap-3 md:grid-cols-[1fr_220px] pt-2">
         <div>
-          <label className="text-sm text-zinc-300">Reflection (encrypted)</label>
+          <label className="text-sm text-zinc-300">{t.reflectionEncrypted}</label>
           <textarea
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-24"
-            placeholder="What insight did I get? What would I do differently?"
+            placeholder={t.reflectionPlaceholder}
             value={reflection}
             onChange={(e) => setReflection(e.target.value)}
           />
         </div>
         <div>
-          <label className="text-sm text-zinc-300">Cognitive distortion</label>
+          <label className="text-sm text-zinc-300">{t.distortion}</label>
           <select
             className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-[42px]"
             value={distortion}
@@ -263,11 +274,11 @@ export default function EmotionalStateForm({ onSubmitted }: { onSubmitted: () =>
           >
             {COGNITIVE_DISTORTIONS.map((c) => (
               <option key={c} value={c}>
-                {c || "— none —"}
+                {distortionLabel(t, c)}
               </option>
             ))}
           </select>
-          <p className="text-[11px] text-zinc-500 mt-1">Encrypted with the text.</p>
+          <p className="text-[11px] text-zinc-500 mt-1">{t.distortionEncrypted}</p>
         </div>
       </div>
 
@@ -282,7 +293,7 @@ export default function EmotionalStateForm({ onSubmitted }: { onSubmitted: () =>
         disabled={busy || !anyActive}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : anyActive ? "Save emotional state" : "Enable at least one emotion"}
+        {busy ? "…" : anyActive ? t.saveEmotion : t.enableAtLeast}
       </button>
     </div>
   );
@@ -312,6 +323,9 @@ function EmotionCard({
   score,
   onScore,
   children,
+  enableLabel,
+  disableLabel,
+  intensityLabel,
 }: {
   label: string;
   tint: keyof typeof TINT_CLASSES;
@@ -321,12 +335,15 @@ function EmotionCard({
   score: number;
   onScore: (v: number) => void;
   children: React.ReactNode;
+  enableLabel: string;
+  disableLabel: string;
+  intensityLabel: string;
 }) {
-  const t = TINT_CLASSES[tint];
+  const tintCls = TINT_CLASSES[tint];
   return (
     <div
       className={`rounded-lg border p-4 transition-colors ${
-        enabled ? `${t.border} ${t.bg}` : "border-zinc-800 bg-zinc-950/40"
+        enabled ? `${tintCls.border} ${tintCls.bg}` : "border-zinc-800 bg-zinc-950/40"
       }`}
     >
       <button
@@ -335,18 +352,18 @@ function EmotionCard({
         className="flex items-center gap-3 w-full text-left"
       >
         <span
-          className={`inline-block w-2 h-2 rounded-full ${enabled ? t.dot : "bg-zinc-700"}`}
+          className={`inline-block w-2 h-2 rounded-full ${enabled ? tintCls.dot : "bg-zinc-700"}`}
         />
         <span className="font-medium text-zinc-100">{label}</span>
         <span className="text-[11px] text-zinc-500 hidden sm:block">{hint}</span>
         <span className="ml-auto text-xs text-zinc-400">
-          {enabled ? "enabled — click to disable" : "click to enable"}
+          {enabled ? disableLabel : enableLabel}
         </span>
       </button>
 
       {enabled && (
         <div className="mt-3 space-y-3">
-          <Slider label={`${label} intensity`} value={score} onChange={onScore} />
+          <Slider label={`${label} · ${intensityLabel}`} value={score} onChange={onScore} />
           <div className="grid gap-2">{children}</div>
         </div>
       )}

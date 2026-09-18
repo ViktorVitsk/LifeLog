@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useLocale } from "../context/LocaleContext";
 import SkillSessionChart from "../components/skills/SkillSessionChart";
 import SkillSessionHistory from "../components/skills/SkillSessionHistory";
 import MetricSchemaBuilder from "../components/skills/MetricSchemaBuilder";
@@ -10,6 +11,7 @@ import { EMPTY_METRIC_SCHEMA, parseMetricSchema, type MetricSchema } from "../li
 
 export default function SkillsPage() {
   const { token } = useAuth();
+  const { t } = useLocale();
   const qc = useQueryClient();
   const { entries } = useEntries();
 
@@ -41,15 +43,13 @@ export default function SkillsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Skills</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Define skills and metric schemas, then log sessions from Check-in · Skill.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.skillsTitle}</h1>
+        <p className="text-sm text-zinc-400 mt-1">{t.skillsHint}</p>
       </div>
 
       {offline ? (
         <div className="rounded border border-zinc-700 bg-zinc-900/50 text-zinc-300 text-xs p-2">
-          Offline — skill list may be stale. Create/update needs a connection.
+          {t.offlineSkills}
         </div>
       ) : rawErr ? (
         <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
@@ -68,11 +68,11 @@ export default function SkillsPage() {
             }}
           />
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-sm font-medium text-zinc-200 mb-2">Your skills</h2>
+            <h2 className="text-sm font-medium text-zinc-200 mb-2">{t.yourSkills}</h2>
             {skillsQuery.isLoading ? (
-              <p className="text-sm text-zinc-500">Loading…</p>
+              <p className="text-sm text-zinc-500">{t.loading}</p>
             ) : skills.length === 0 ? (
-              <p className="text-sm text-zinc-500">No skills yet.</p>
+              <p className="text-sm text-zinc-500">{t.noSkills}</p>
             ) : (
               <ul className="space-y-1">
                 {skills.map((s) => (
@@ -92,7 +92,7 @@ export default function SkillsPage() {
                       />
                       <span className="flex-1 truncate">{s.name}</span>
                       {!s.is_active && (
-                        <span className="text-[10px] text-zinc-500 uppercase">off</span>
+                        <span className="text-[10px] text-zinc-500 uppercase">{t.off}</span>
                       )}
                     </button>
                   </li>
@@ -115,7 +115,7 @@ export default function SkillsPage() {
               />
             </>
           ) : (
-            <p className="text-sm text-zinc-500">Create a skill to see progress.</p>
+            <p className="text-sm text-zinc-500">{t.createSkillToSee}</p>
           )}
         </div>
       </div>
@@ -132,6 +132,7 @@ function CreateSkillForm({
   disabled: boolean;
   onCreated: (s: Skill) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState("");
   const [color, setColor] = useState("#6366f1");
   const [schema, setSchema] = useState<MetricSchema>(EMPTY_METRIC_SCHEMA);
@@ -160,15 +161,15 @@ function CreateSkillForm({
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-      <h2 className="text-sm font-medium text-zinc-200">New skill</h2>
+      <h2 className="text-sm font-medium text-zinc-200">{t.newSkill}</h2>
       <input
         className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm"
-        placeholder="Name (e.g. Boxing)"
+        placeholder={t.skillNamePlaceholder}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
       <label className="flex items-center gap-2 text-xs text-zinc-400">
-        Color
+        {t.color}
         <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
       </label>
       <MetricSchemaBuilder schema={schema} onChange={setSchema} />
@@ -181,7 +182,7 @@ function CreateSkillForm({
         onClick={submit}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm"
       >
-        {busy ? "…" : "Create skill"}
+        {busy ? "…" : t.createSkill}
       </button>
     </div>
   );
@@ -198,11 +199,11 @@ function SkillEditor({
   disabled: boolean;
   onSaved: () => void;
 }) {
+  const { t } = useLocale();
   const [schema, setSchema] = useState<MetricSchema>(() => parseMetricSchema(skill.metric_schema));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // When switching selected skill, reset local editor state from server row.
   useEffect(() => {
     setSchema(parseMetricSchema(skill.metric_schema));
   }, [skill.id, skill.metric_schema]);
@@ -238,14 +239,16 @@ function SkillEditor({
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Edit “{skill.name}”</h2>
+        <h2 className="text-sm font-medium text-zinc-200">
+          {t.editSkill.replace("{name}", skill.name)}
+        </h2>
         <button
           type="button"
           disabled={disabled || busy}
           onClick={toggleActive}
           className="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800"
         >
-          {skill.is_active ? "Deactivate" : "Activate"}
+          {skill.is_active ? t.deactivate : t.activate}
         </button>
       </div>
       <MetricSchemaBuilder schema={schema} onChange={setSchema} />
@@ -258,7 +261,7 @@ function SkillEditor({
         onClick={save}
         className="w-full py-2 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-sm"
       >
-        {busy ? "…" : "Save schema"}
+        {busy ? "…" : t.saveSchema}
       </button>
     </div>
   );

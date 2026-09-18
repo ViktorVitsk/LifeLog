@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import { api } from "../../lib/api";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import {
@@ -13,6 +14,7 @@ import Slider from "../ui/Slider";
 
 export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek, token } = useAuth();
+  const { t } = useLocale();
   const skillsQuery = useQuery({
     queryKey: ["skills", token],
     enabled: Boolean(token),
@@ -75,12 +77,12 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
   }
 
   if (skillsQuery.isLoading) {
-    return <div className="text-sm text-zinc-500">Loading skills…</div>;
+    return <div className="text-sm text-zinc-500">{t.loadingSkills}</div>;
   }
   if (skills.length === 0) {
     return (
       <div className="text-sm text-zinc-400 space-y-2">
-        <p>No active skills yet. Create one under Skills first.</p>
+        <p>{t.noActiveSkills}</p>
       </div>
     );
   }
@@ -88,7 +90,7 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
   return (
     <div className="space-y-4">
       <label className="block">
-        <span className="text-sm text-zinc-300">Skill</span>
+        <span className="text-sm text-zinc-300">{t.skill}</span>
         <select
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
           value={skillId}
@@ -102,12 +104,12 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
         </select>
       </label>
 
-      <Slider label="Session duration (minutes)" value={duration} min={5} max={240} onChange={setDuration} />
+      <Slider label={t.sessionDuration} value={duration} min={5} max={240} onChange={setDuration} />
 
       <MetricFieldsForm schema={schema} value={customMetrics} onChange={setCustomMetrics} />
 
       <div>
-        <label className="text-sm text-zinc-300">What worked (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.whatWorked}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
           value={whatWorked}
@@ -115,7 +117,7 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
         />
       </div>
       <div>
-        <label className="text-sm text-zinc-300">What to improve (encrypted)</label>
+        <label className="text-sm text-zinc-300">{t.toImprove}</label>
         <textarea
           className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
           value={whatToImprove}
@@ -134,7 +136,7 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
         disabled={busy || !skillId}
         className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
-        {busy ? "…" : "Save session"}
+        {busy ? "…" : t.saveSession}
       </button>
     </div>
   );

@@ -8,6 +8,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useLocale } from "../../context/LocaleContext";
+import { dateLocale } from "../../i18n/locale";
 import type { EntryRead } from "../../lib/api";
 
 interface Props {
@@ -20,18 +22,21 @@ interface Props {
  * Uses only open fields — no decryption.
  */
 export default function SkillSessionChart({ entries, days = 56 }: Props) {
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
   const data = useMemo(() => buildDailyBars(entries, days), [entries, days]);
   const hasAny = data.some((d) => d.minutes > 0);
+  const tick = (s: string) => formatDayTick(s, loc);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm font-medium text-zinc-200">Practice time</h3>
-        <span className="text-[11px] text-zinc-500">minutes / day · last {days} days</span>
+        <h3 className="text-sm font-medium text-zinc-200">{t.practiceTime}</h3>
+        <span className="text-[11px] text-zinc-500">{t.minutesPerDay.replace("{n}", String(days))}</span>
       </div>
       {!hasAny ? (
         <div className="h-48 flex items-center justify-center text-sm text-zinc-500">
-          No sessions in this range yet.
+          {t.noSessionsRange}
         </div>
       ) : (
         <div className="h-48">
@@ -43,7 +48,7 @@ export default function SkillSessionChart({ entries, days = 56 }: Props) {
                 stroke="#71717a"
                 fontSize={10}
                 interval="preserveStartEnd"
-                tickFormatter={formatDayTick}
+                tickFormatter={tick}
               />
               <YAxis stroke="#71717a" fontSize={11} />
               <Tooltip
@@ -53,9 +58,9 @@ export default function SkillSessionChart({ entries, days = 56 }: Props) {
                   borderRadius: 6,
                   fontSize: 12,
                 }}
-                labelFormatter={formatDayTick}
+                labelFormatter={tick}
               />
-              <Bar dataKey="minutes" fill="#6366f1" radius={[2, 2, 0, 0]} name="minutes" />
+              <Bar dataKey="minutes" fill="#6366f1" radius={[2, 2, 0, 0]} name={t.minShort} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -103,8 +108,8 @@ function dayKey(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-function formatDayTick(s: string) {
+function formatDayTick(s: string, loc: string) {
   const [y, mo, d] = s.split("-").map(Number);
   const date = new Date(y, mo - 1, d);
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return date.toLocaleDateString(loc, { month: "short", day: "numeric" });
 }

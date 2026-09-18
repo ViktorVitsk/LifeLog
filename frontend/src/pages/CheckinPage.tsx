@@ -7,6 +7,7 @@ import HabitLogForm from "../components/checkin/HabitLogForm";
 import SkillSessionForm from "../components/checkin/SkillSessionForm";
 import SleepForm from "../components/checkin/SleepForm";
 import ThoughtForm from "../components/checkin/ThoughtForm";
+import { useLocale } from "../context/LocaleContext";
 import { useSync } from "../context/SyncContext";
 
 type EntryType =
@@ -19,21 +20,22 @@ type EntryType =
   | "THOUGHT"
   | "GRATITUDE";
 
-const TABS: { id: EntryType; label: string; hint: string }[] = [
-  { id: "DAILY_CHECKIN", label: "Daily", hint: "Morning / evening check-in" },
-  { id: "EMOTIONAL_STATE", label: "Emotion", hint: "Gap-model work on a specific feeling" },
-  { id: "SKILL_SESSION", label: "Skill", hint: "Practice session (uses skill metric schema)" },
-  { id: "HABIT_LOG", label: "Habit", hint: "Mark a habit done (or log a value)" },
-  { id: "SLEEP", label: "Sleep", hint: "Hours + quality (open); times & dreams encrypted" },
-  { id: "BODY_METRICS", label: "Body", hint: "Weight / fat % open; other measures encrypted" },
-  { id: "THOUGHT", label: "Thought", hint: "A free-form journal entry" },
-  { id: "GRATITUDE", label: "Gratitude", hint: "Three specific things" },
-];
-
 export default function CheckinPage() {
+  const { t } = useLocale();
   const [active, setActive] = useState<EntryType>("DAILY_CHECKIN");
   const [savedFlash, setSavedFlash] = useState(false);
   const sync = useSync();
+
+  const tabs: { id: EntryType; label: string; hint: string }[] = [
+    { id: "DAILY_CHECKIN", label: t.checkinDaily, hint: t.checkinDailyHint },
+    { id: "EMOTIONAL_STATE", label: t.checkinEmotion, hint: t.checkinEmotionHint },
+    { id: "SKILL_SESSION", label: t.checkinSkill, hint: t.checkinSkillHint },
+    { id: "HABIT_LOG", label: t.checkinHabit, hint: t.checkinHabitHint },
+    { id: "SLEEP", label: t.checkinSleep, hint: t.checkinSleepHint },
+    { id: "BODY_METRICS", label: t.checkinBody, hint: t.checkinBodyHint },
+    { id: "THOUGHT", label: t.checkinThought, hint: t.checkinThoughtHint },
+    { id: "GRATITUDE", label: t.checkinGratitude, hint: t.checkinGratitudeHint },
+  ];
 
   function onSubmitted() {
     setSavedFlash(true);
@@ -41,25 +43,25 @@ export default function CheckinPage() {
     window.setTimeout(() => setSavedFlash(false), 2200);
   }
 
-  const activeTab = TABS.find((t) => t.id === active)!;
+  const activeTab = tabs.find((tab) => tab.id === active)!;
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Check-in</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.manualForms}</h1>
         <p className="text-sm text-zinc-400 mt-1">{activeTab.hint}</p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1 rounded border border-zinc-800 p-0.5 text-xs sm:text-sm">
-        {TABS.map((t) => (
+      <div className="flex gap-1 overflow-x-auto rounded border border-zinc-800 p-0.5 text-xs sm:text-sm">
+        {tabs.map((tab) => (
           <button
-            key={t.id}
-            onClick={() => setActive(t.id)}
-            className={`py-1.5 rounded ${
-              active === t.id ? "bg-indigo-600 text-white" : "text-zinc-400 hover:bg-zinc-800"
+            key={tab.id}
+            onClick={() => setActive(tab.id)}
+            className={`shrink-0 min-h-[44px] px-3 rounded ${
+              active === tab.id ? "bg-indigo-600 text-white" : "text-zinc-400 hover:bg-zinc-800"
             }`}
           >
-            {t.label}
+            {tab.label}
           </button>
         ))}
       </div>
@@ -77,7 +79,7 @@ export default function CheckinPage() {
 
       {savedFlash && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-emerald-600 text-white text-sm px-4 py-1.5 shadow-lg">
-          Encrypted & queued for sync
+          {t.save}
         </div>
       )}
     </div>

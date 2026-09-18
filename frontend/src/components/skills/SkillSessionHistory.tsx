@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useLocale } from "../../context/LocaleContext";
 import type { MergedEntry } from "../../hooks/useEntries";
 import { useDecryptedEntries } from "../../hooks/useDecryptedEntries";
+import { dateLocale } from "../../i18n/locale";
+import type { TStrings } from "../../i18n/strings";
 
 interface SkillPayload {
   v?: number;
@@ -10,10 +13,6 @@ interface SkillPayload {
   what_to_improve?: string;
 }
 
-/**
- * Recent SKILL_SESSION rows for the selected skill — open duration always
- * visible; encrypted session notes + custom_metrics decrypt on demand.
- */
 export default function SkillSessionHistory({
   entries,
   skillId,
@@ -24,6 +23,8 @@ export default function SkillSessionHistory({
   limit?: number;
 }) {
   const { kek } = useAuth();
+  const { locale, t } = useLocale();
+  const loc = dateLocale(locale);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const rows = useMemo(
@@ -47,12 +48,10 @@ export default function SkillSessionHistory({
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-      <h3 className="text-sm font-medium text-zinc-200 mb-2">Session log</h3>
-      <p className="text-[11px] text-zinc-500 mb-2">
-        Duration is open metadata; metrics & notes decrypt when you expand.
-      </p>
+      <h3 className="text-sm font-medium text-zinc-200 mb-2">{t.sessionLog}</h3>
+      <p className="text-[11px] text-zinc-500 mb-2">{t.sessionLogHint}</p>
       {rows.length === 0 ? (
-        <p className="text-xs text-zinc-500">No sessions for this skill yet.</p>
+        <p className="text-xs text-zinc-500">{t.noSessionsSkill}</p>
       ) : (
         <ul className="divide-y divide-zinc-800 text-sm">
           {rows.map((e) => {
@@ -67,25 +66,27 @@ export default function SkillSessionHistory({
                   className="w-full flex items-center gap-2 text-left"
                 >
                   <span className="text-[11px] text-zinc-500 w-32 shrink-0 tabular-nums">
-                    {formatTs(e.timestamp)}
+                    {formatTs(e.timestamp, loc)}
                   </span>
                   <span className="text-zinc-200 font-mono text-xs">
                     {typeof e.session_duration_min === "number"
-                      ? `${e.session_duration_min} min`
+                      ? `${e.session_duration_min} ${t.minShort}`
                       : "—"}
                   </span>
-                  <span className="ml-auto text-[11px] text-zinc-500">{isOpen ? "hide" : "details"}</span>
+                  <span className="ml-auto text-[11px] text-zinc-500">
+                    {isOpen ? t.hide : t.details}
+                  </span>
                 </button>
                 {isOpen && (
                   <div className="mt-2 pl-32 pr-1 text-xs space-y-2">
                     {!kek ? (
-                      <div className="text-zinc-500">Unlock required to decrypt.</div>
+                      <div className="text-zinc-500">{t.unlockRequired}</div>
                     ) : pending && !p && !err ? (
-                      <div className="text-zinc-500">Decrypting…</div>
+                      <div className="text-zinc-500">{t.decrypting}</div>
                     ) : err ? (
                       <div className="text-rose-300">{err}</div>
                     ) : p ? (
-                      <SkillPayloadView payload={p} />
+                      <SkillPayloadView payload={p} t={t} />
                     ) : null}
                   </div>
                 )}
@@ -98,14 +99,14 @@ export default function SkillSessionHistory({
   );
 }
 
-function SkillPayloadView({ payload }: { payload: SkillPayload }) {
+function SkillPayloadView({ payload, t }: { payload: SkillPayload; t: TStrings }) {
   const cm = payload.custom_metrics;
   const hasCm = cm && typeof cm === "object" && Object.keys(cm).length > 0;
   return (
     <div className="space-y-2 text-zinc-300">
       {hasCm && cm && (
         <div>
-          <div className="text-[10px] uppercase text-zinc-500 mb-0.5">Custom metrics</div>
+          <div className="text-[10px] uppercase text-zinc-500 mb-0.5">{t.customMetrics}</div>
           <ul className="font-mono text-[11px] space-y-0.5">
             {Object.entries(cm).map(([k, v]) => (
               <li key={k}>
@@ -117,25 +118,25 @@ function SkillPayloadView({ payload }: { payload: SkillPayload }) {
       )}
       {payload.what_worked ? (
         <div>
-          <div className="text-[10px] uppercase text-zinc-500">What worked</div>
+          <div className="text-[10px] uppercase text-zinc-500">{t.whatWorked}</div>
           <div className="whitespace-pre-wrap text-zinc-200">{payload.what_worked}</div>
         </div>
       ) : null}
       {payload.what_to_improve ? (
         <div>
-          <div className="text-[10px] uppercase text-zinc-500">To improve</div>
+          <div className="text-[10px] uppercase text-zinc-500">{t.toImprove}</div>
           <div className="whitespace-pre-wrap text-zinc-200">{payload.what_to_improve}</div>
         </div>
       ) : null}
       {!hasCm && !payload.what_worked && !payload.what_to_improve && (
-        <div className="text-zinc-500">(no encrypted fields)</div>
+        <div className="text-zinc-500">{t.noEncrypted}</div>
       )}
     </div>
   );
 }
 
-function formatTs(ts: string) {
-  return new Date(ts).toLocaleString(undefined, {
+function formatTs(ts: string, loc: string) {
+  return new Date(ts).toLocaleString(loc, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

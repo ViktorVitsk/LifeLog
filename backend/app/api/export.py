@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -26,6 +26,8 @@ class ExportMetadataRow(BaseModel):
 
     id: UUID
     timestamp: datetime
+    recorded_at: datetime | None = None
+    event_timezone: str | None = None
     entry_type: EntryType
     skill_id: UUID | None = None
     habit_id: UUID | None = None
@@ -50,22 +52,39 @@ class ExportMetadataRow(BaseModel):
     fear_score: int | None = None
     created_at: datetime
     synced_from_offline: bool
+    version: int = 1
 
 
-@router.get("/metadata", response_model=list[ExportMetadataRow])
+class ExportPage(BaseModel):
+    items: list[ExportMetadataRow]
+    offset: int
+    limit: int
+    total: int
+    next_offset: int | None = None
+
+
+@router.get("/metadata", response_model=ExportPage)
 async def export_metadata(
-    limit: int = Query(default=1000, ge=1, le=10000),
+    limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[ExportMetadataRow]:
+) -> ExportPage:
+    filt = (Entry.user_id == current_user.id, Entry.deleted_at.is_(None))
+    total = int(await db.scalar(select(func.count()).select_from(Entry).where(*filt)) or 0)
     stmt = (
         select(Entry)
-        .where(Entry.user_id == current_user.id, Entry.deleted_at.is_(None))
-        .order_by(Entry.timestamp.desc())
+        .where(*filt)
+        .order_by(Entry.timestamp.desc(), Entry.id.desc())
         .limit(limit)
         .offset(offset)
     )
-    result = await db.execute(stmt)
-    rows = result.scalars().all()
-    return [ExportMetadataRow.model_validate(r) for r in rows]
+    rows = list((await db.execute(stmt)).scalars().all())
+    next_offset = offset + limit if offset + len(rows) < total else None
+    return ExportPage(
+        items=[ExportMetadataRow.model_validate(row) for row in rows],
+        offset=offset,
+        limit=limit,
+        total=total,
+        next_offset=next_offset,
+    )

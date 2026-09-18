@@ -75,7 +75,7 @@ export default function GapChart({ entries, days = 30 }: Props) {
                 fontSize={11}
                 tickFormatter={tick}
               />
-              <YAxis stroke="#71717a" fontSize={11} domain={[0, 10]} />
+              <YAxis stroke="#71717a" fontSize={11} domain={[1, 10]} />
               <Tooltip
                 contentStyle={{
                   background: "#18181b",

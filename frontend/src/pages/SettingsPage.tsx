@@ -6,10 +6,10 @@ import LanguageSelect from "../components/LanguageSelect";
 import OrphanRecovery from "../components/OrphanRecovery";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
-import { useEntries, type MergedEntry } from "../hooks/useEntries";
-import { api } from "../lib/api";
+import { api, type EntryRead, type ExportMetadataRow } from "../lib/api";
 import { COMMON_TIMEZONES } from "../lib/dates";
 import { decryptEntry } from "../lib/crypto";
+import { collectArrayPages, collectPages } from "../lib/paging";
 
 function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -21,15 +21,14 @@ function downloadJson(filename: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function stripCipher(e: MergedEntry) {
-  const { encrypted_content: _c, encrypted_dek: _d, ...rest } = e;
+function stripCipher(e: EntryRead | ExportMetadataRow) {
+  const { encrypted_content: _c, encrypted_dek: _d, ...rest } = e as EntryRead;
   return rest;
 }
 
 export default function SettingsPage() {
   const { token, kek, logout, username, timezone, updateTimezone } = useAuth();
   const { t } = useLocale();
-  const { entries } = useEntries();
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [llm, setLlm] = useState<LlmSettings>({ ...DEFAULT_LLM_SETTINGS });
@@ -45,9 +44,16 @@ export default function SettingsPage() {
     setBusy("meta");
     setMsg(null);
     try {
-      const rows = await api.exportMetadata(token, { limit: 10_000 });
-      downloadJson(`lifelog-metadata-${new Date().toISOString().slice(0, 10)}.json`, rows);
-      setMsg(`${rows.length}`);
+      const { items, pages } = await collectPages(
+        (offset, limit) => api.exportMetadata(token, { offset, limit }),
+        200,
+      );
+      downloadJson(`lifelog-metadata-${new Date().toISOString().slice(0, 10)}.json`, {
+        items,
+        total: items.length,
+        pages,
+      });
+      setMsg(`${items.length}`);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -56,30 +62,50 @@ export default function SettingsPage() {
   }
 
   async function onFullExport() {
-    if (!kek) {
+    if (!token || !kek) {
       setMsg(t.unlockForExport);
       return;
     }
     setBusy("full");
     setMsg(null);
     try {
+      const { items: rows, pages } = await collectArrayPages(
+        (offset, limit) => api.listEntries(token, { limit, offset }),
+        200,
+      );
       const out: Record<string, unknown>[] = [];
-      for (const e of entries) {
+      const decrypt_errors: { id: string; reason: string }[] = [];
+      for (const e of rows) {
         const base = stripCipher(e);
         try {
           const raw = await decryptEntry(e.encrypted_content, e.encrypted_dek, kek);
           const plaintext = JSON.parse(raw) as unknown;
           out.push({ ...base, plaintext });
         } catch {
+          decrypt_errors.push({ id: e.id, reason: "decrypt_failed" });
           out.push({ ...base, plaintext: null, decrypt_error: true });
         }
       }
       const chat = await exportDecryptedTurns(kek);
       downloadJson(`lifelog-full-${new Date().toISOString().slice(0, 10)}.json`, {
+        generated_at: new Date().toISOString(),
+        timezone,
         entries: out,
         chat_turns: chat,
+        report: {
+          entry_pages: pages,
+          entry_count: out.length,
+          decrypt_ok: out.length - decrypt_errors.length,
+          decrypt_error_count: decrypt_errors.length,
+          decrypt_errors,
+        },
       });
-      setMsg(`${out.length} + ${chat.length}`);
+      setMsg(
+        t.exportReport
+          .replace("{n}", String(out.length))
+          .replace("{chat}", String(chat.length))
+          .replace("{err}", String(decrypt_errors.length)),
+      );
     } catch (e) {
       setMsg((e as Error).message);
     } finally {

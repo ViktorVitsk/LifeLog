@@ -110,6 +110,14 @@ export interface EntryRead extends EntrySyncPayload {
 
 export type ExportMetadataRow = Omit<EntryRead, "encrypted_dek" | "encrypted_content">;
 
+export interface ExportPage {
+  items: ExportMetadataRow[];
+  offset: number;
+  limit: number;
+  total: number;
+  next_offset: number | null;
+}
+
 export interface TrendPoint {
   day: string;
   value: number;
@@ -382,12 +390,25 @@ export const api = {
   async exportMetadata(
     token: string,
     params?: { limit?: number; offset?: number },
-  ): Promise<ExportMetadataRow[]> {
+  ): Promise<ExportPage> {
     const q = new URLSearchParams();
     if (params?.limit != null) q.set("limit", String(params.limit));
     if (params?.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
-    return request(`/api/export/metadata${qs ? `?${qs}` : ""}`, { token });
+    const raw = await request<ExportPage | ExportMetadataRow[]>(
+      `/api/export/metadata${qs ? `?${qs}` : ""}`,
+      { token },
+    );
+    if (Array.isArray(raw)) {
+      return {
+        items: raw,
+        offset: params?.offset ?? 0,
+        limit: params?.limit ?? raw.length,
+        total: raw.length,
+        next_offset: null,
+      };
+    }
+    return raw;
   },
 
   async listSkills(token: string): Promise<Skill[]> {

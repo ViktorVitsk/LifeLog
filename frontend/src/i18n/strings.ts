@@ -118,7 +118,8 @@ export const STRINGS = {
     agentSaved: "Настройки агента сохранены (ключ обёрнут вашим KEK).",
     export: "Экспорт",
     exportHint:
-      "Метаданные — через API, без шифротекста. Полный экспорт — в браузере: записи и чат «Сегодня», расшифрованные KEK.",
+      "Метаданные обходят все страницы API, без шифротекста. Полный экспорт — в браузере: все страницы записей и чат, расшифрованные KEK. Ошибки расшифровки видны в отчёте.",
+    exportReport: "записей {n} · чат {chat} · ошибок расшифровки {err}",
     downloadMeta: "Скачать метаданные JSON",
     downloadFull: "Скачать полный расшифрованный JSON",
     unlockForExport: "Сначала разблокируйте мастер-паролем, чтобы собрать расшифрованный экспорт.",
@@ -354,7 +355,7 @@ export const STRINGS = {
     saveCheckin: "Сохранить чекин",
     socialBattery: "Соц. батарея",
     gapFormHint:
-      "Gap-модель: назовите чувство и разрыв. Включайте только то, что есть сегодня. Баллы 0–10 открыты; весь текст шифруется.",
+      "Gap-модель: назовите чувство и разрыв. Включайте только то, что есть сегодня. Баллы 1–10 открыты; весь текст шифруется.",
     resentmentHint: "Разрыв ожидания и реальности в отношении других",
     guiltHint: "Разрыв между моим поступком и тем, чего, как кажется, ждали другие",
     shameHint: "Разрыв между поступком и идеальным «я»",
@@ -556,7 +557,8 @@ export const STRINGS = {
     agentSaved: "Agent settings saved (API key wrapped with your KEK).",
     export: "Export",
     exportHint:
-      "Metadata export uses the server API and excludes ciphertext. Full export runs in your browser: entries plus Today chat turns decrypted with your KEK.",
+      "Metadata walks every API page and excludes ciphertext. Full export runs in your browser across all entry pages plus Today chat. Decrypt errors are listed in the report.",
+    exportReport: "{n} entries · {chat} chat turns · {err} decrypt errors",
     downloadMeta: "Download metadata JSON",
     downloadFull: "Download full decrypted JSON",
     unlockForExport: "Unlock with your master password to build a decrypted export.",
@@ -792,7 +794,7 @@ export const STRINGS = {
     saveCheckin: "Save check-in",
     socialBattery: "Social battery",
     gapFormHint:
-      "Gap model: name what you feel, find the gap. Enable only the emotions that apply today. Only the 0–10 scores leave your device; all text is encrypted.",
+      "Gap model: name what you feel, find the gap. Enable only the emotions that apply today. Only the 1–10 scores leave your device; all text is encrypted.",
     resentmentHint: "Expectation vs reality gap toward others",
     guiltHint: "Gap between my action and what I think others expected",
     shameHint: "Gap between my action and my ideal self",

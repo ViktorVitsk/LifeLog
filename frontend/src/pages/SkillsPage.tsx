@@ -5,6 +5,7 @@ import { useLocale } from "../context/LocaleContext";
 import SkillSessionChart from "../components/skills/SkillSessionChart";
 import SkillSessionHistory from "../components/skills/SkillSessionHistory";
 import MetricSchemaBuilder from "../components/skills/MetricSchemaBuilder";
+import { ColorDots } from "../components/ui/ChoiceGrid";
 import { useEntries } from "../hooks/useEntries";
 import { api, isNetworkError, type Skill } from "../lib/api";
 import { EMPTY_METRIC_SCHEMA, parseMetricSchema, type MetricSchema } from "../lib/metricSchema";
@@ -22,10 +23,12 @@ export default function SkillsPage() {
   });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   const skills = skillsQuery.data ?? [];
   const activeSkills = useMemo(() => skills.filter((s) => s.is_active), [skills]);
 
   const selected = skills.find((s) => s.id === selectedId) ?? activeSkills[0] ?? null;
+  const showCreate = !skillsQuery.isLoading && (creating || skills.length === 0);
 
   const sessionEntries = useMemo(() => {
     if (!selected) return [];
@@ -48,46 +51,44 @@ export default function SkillsPage() {
       </div>
 
       {offline ? (
-        <div className="rounded border border-zinc-700 bg-zinc-900/50 text-zinc-300 text-xs p-2">
+        <div className="rounded-xl border border-zinc-700 bg-zinc-900/50 text-zinc-300 text-xs p-2">
           {t.offlineSkills}
         </div>
       ) : rawErr ? (
-        <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
+        <div className="rounded-xl border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
           {rawErr.message}
         </div>
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">
-          <CreateSkillForm
-            token={token ?? ""}
-            disabled={!token || offline}
-            onCreated={(s) => {
-              qc.invalidateQueries({ queryKey: ["skills"] });
-              setSelectedId(s.id);
-            }}
-          />
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-sm font-medium text-zinc-200 mb-2">{t.yourSkills}</h2>
-            {skillsQuery.isLoading ? (
-              <p className="text-sm text-zinc-500">{t.loading}</p>
-            ) : skills.length === 0 ? (
-              <p className="text-sm text-zinc-500">{t.noSkills}</p>
-            ) : (
-              <ul className="space-y-1">
+          {skillsQuery.isLoading && <p className="text-sm text-zinc-500">{t.loading}</p>}
+          {skills.length > 0 && (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h2 className="text-sm font-medium text-zinc-200">{t.yourSkills}</h2>
+              <button
+                type="button"
+                onClick={() => setCreating((v) => !v)}
+                className="text-xs min-h-[36px] px-3 rounded-full border border-zinc-700 hover:bg-zinc-800"
+              >
+                {creating ? t.hide : t.newSkill}
+              </button>
+            </div>
+            <ul className="space-y-1.5">
                 {skills.map((s) => (
                   <li key={s.id}>
                     <button
                       type="button"
                       onClick={() => setSelectedId(s.id)}
-                      className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
+                      className={`w-full text-left px-3 min-h-[44px] rounded-xl text-sm flex items-center gap-2 ${
                         selected?.id === s.id
                           ? "bg-indigo-900/40 border border-indigo-700"
-                          : "border border-transparent hover:bg-zinc-800"
+                          : "border border-zinc-800 hover:bg-zinc-800"
                       } ${s.is_active ? "" : "opacity-50"}`}
                     >
                       <span
-                        className="w-2 h-2 rounded-full shrink-0"
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
                         style={{ background: s.color || "#6366f1" }}
                       />
                       <span className="flex-1 truncate">{s.name}</span>
@@ -97,9 +98,21 @@ export default function SkillsPage() {
                     </button>
                   </li>
                 ))}
-              </ul>
-            )}
+            </ul>
           </div>
+          )}
+
+          {showCreate && (
+            <CreateSkillForm
+              token={token ?? ""}
+              disabled={!token || offline}
+              onCreated={(s) => {
+                qc.invalidateQueries({ queryKey: ["skills"] });
+                setSelectedId(s.id);
+                setCreating(false);
+              }}
+            />
+          )}
         </div>
 
         <div className="space-y-4">
@@ -136,6 +149,7 @@ function CreateSkillForm({
   const [name, setName] = useState("");
   const [color, setColor] = useState("#6366f1");
   const [schema, setSchema] = useState<MetricSchema>(EMPTY_METRIC_SCHEMA);
+  const [metricsOpen, setMetricsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -151,6 +165,7 @@ function CreateSkillForm({
       });
       setName("");
       setSchema(EMPTY_METRIC_SCHEMA);
+      setMetricsOpen(false);
       onCreated(s);
     } catch (e) {
       setErr((e as Error).message);
@@ -160,27 +175,37 @@ function CreateSkillForm({
   }
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-4">
       <h2 className="text-sm font-medium text-zinc-200">{t.newSkill}</h2>
       <input
-        className="w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm"
+        className="w-full rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2.5 text-sm min-h-[44px]"
         placeholder={t.skillNamePlaceholder}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <label className="flex items-center gap-2 text-xs text-zinc-400">
-        {t.color}
-        <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-      </label>
-      <MetricSchemaBuilder schema={schema} onChange={setSchema} />
+      <div>
+        <div className="text-xs text-zinc-400 mb-1.5">{t.color}</div>
+        <ColorDots value={color} onChange={setColor} />
+      </div>
+      {metricsOpen || schema.fields.length > 0 ? (
+        <MetricSchemaBuilder schema={schema} onChange={setSchema} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setMetricsOpen(true)}
+          className="text-xs text-zinc-400 underline underline-offset-2"
+        >
+          {t.addMetricsOptional}
+        </button>
+      )}
       {err && (
-        <div className="text-xs text-rose-300 border border-rose-800 rounded p-2">{err}</div>
+        <div className="text-xs text-rose-300 border border-rose-800 rounded-xl p-2">{err}</div>
       )}
       <button
         type="button"
         disabled={disabled || busy || !name.trim()}
         onClick={submit}
-        className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm"
+        className="w-full min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm"
       >
         {busy ? "…" : t.createSkill}
       </button>
@@ -237,7 +262,7 @@ function SkillEditor({
   }
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-zinc-200">
           {t.editSkill.replace("{name}", skill.name)}
@@ -246,20 +271,20 @@ function SkillEditor({
           type="button"
           disabled={disabled || busy}
           onClick={toggleActive}
-          className="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800"
+          className="text-xs min-h-[36px] px-3 rounded-full border border-zinc-700 hover:bg-zinc-800"
         >
           {skill.is_active ? t.deactivate : t.activate}
         </button>
       </div>
       <MetricSchemaBuilder schema={schema} onChange={setSchema} />
       {err && (
-        <div className="text-xs text-rose-300 border border-rose-800 rounded p-2">{err}</div>
+        <div className="text-xs text-rose-300 border border-rose-800 rounded-xl p-2">{err}</div>
       )}
       <button
         type="button"
         disabled={disabled || busy}
         onClick={save}
-        className="w-full py-2 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-sm"
+        className="w-full min-h-[44px] rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-sm"
       >
         {busy ? "…" : t.saveSchema}
       </button>

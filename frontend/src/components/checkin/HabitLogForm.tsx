@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useLocale } from "../../context/LocaleContext";
 import { api } from "../../lib/api";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
+import { ChoiceGrid, Segmented } from "../ui/ChoiceGrid";
 
 export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek, token } = useAuth();
@@ -67,49 +69,57 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
   }
   if (habits.length === 0) {
     return (
-      <div className="text-sm text-zinc-400">
-        {t.noActiveHabits}
+      <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-950/40 px-4 py-8 text-center space-y-3">
+        <p className="text-sm text-zinc-400">{t.noActiveHabits}</p>
+        <Link
+          to="/insights/habits"
+          className="inline-flex min-h-[44px] items-center px-4 rounded-xl bg-indigo-600 text-sm text-white"
+        >
+          {t.goToHabits}
+        </Link>
       </div>
     );
   }
 
+  const showValue =
+    habit && (habit.target_value != null || (habit.unit && habit.unit.trim().length > 0));
+
   return (
-    <div className="space-y-4">
-      <label className="block">
-        <span className="text-sm text-zinc-300">{t.habit}</span>
-        <select
-          className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
+    <div className="space-y-5">
+      <div>
+        <div className="text-sm text-zinc-300 mb-2">{t.pickHabit}</div>
+        <ChoiceGrid
+          items={habits.map((h) => ({
+            id: h.id,
+            name: h.name,
+            color: h.color,
+            hint: h.frequency === "weekly" ? t.freqWeekly : t.freqDaily,
+          }))}
           value={habitId}
-          onChange={(e) => setHabitId(e.target.value)}
-        >
-          {habits.map((h) => (
-            <option key={h.id} value={h.id}>
-              {h.name}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="flex items-center gap-2 text-sm text-zinc-300">
-        <input
-          type="checkbox"
-          className="rounded border-zinc-600"
-          checked={completed}
-          onChange={(e) => setCompleted(e.target.checked)}
+          onChange={setHabitId}
         />
-        {t.completedToday}
-      </label>
+      </div>
 
-      {habit && (habit.target_value != null || (habit.unit && habit.unit.trim().length > 0)) ? (
+      <Segmented
+        value={completed ? "done" : "miss"}
+        onChange={(id) => setCompleted(id === "done")}
+        options={[
+          { id: "done", label: t.habitDone, activeClass: "border-emerald-500 bg-emerald-700 text-white" },
+          { id: "miss", label: t.missedToday, activeClass: "border-zinc-500 bg-zinc-700 text-white" },
+        ]}
+      />
+
+      {showValue ? (
         <label className="block">
           <span className="text-sm text-zinc-300">
-            {t.value} {habit.unit ? `(${habit.unit})` : ""}
+            {t.value}
+            {habit?.unit ? ` · ${habit.unit}` : ""}
           </span>
           <input
             type="number"
-            className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
+            className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2.5 text-sm min-h-[44px]"
             placeholder={
-              habit.target_value != null
+              habit?.target_value != null
                 ? t.targetApprox.replace("{n}", String(habit.target_value))
                 : ""
             }
@@ -125,7 +135,7 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
       <div>
         <label className="text-sm text-zinc-300">{t.notesEncrypted}</label>
         <textarea
-          className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
+          className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
           placeholder={t.optionalContext}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
@@ -133,7 +143,7 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
       </div>
 
       {err && (
-        <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
+        <div className="rounded-xl border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
           {err}
         </div>
       )}
@@ -141,7 +151,7 @@ export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void 
       <button
         onClick={submit}
         disabled={busy || !habitId}
-        className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
+        className="w-full min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
         {busy ? "…" : t.logHabit}
       </button>

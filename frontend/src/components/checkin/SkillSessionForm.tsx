@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useLocale } from "../../context/LocaleContext";
 import { api } from "../../lib/api";
@@ -10,7 +11,10 @@ import {
   type MetricSchema,
 } from "../../lib/metricSchema";
 import MetricFieldsForm from "../skills/MetricFieldsForm";
+import { ChoiceGrid } from "../ui/ChoiceGrid";
 import Slider from "../ui/Slider";
+
+const DURATION_PRESETS = [15, 30, 45, 60, 90, 120];
 
 export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => void }) {
   const { kek, token } = useAuth();
@@ -81,52 +85,80 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
   }
   if (skills.length === 0) {
     return (
-      <div className="text-sm text-zinc-400 space-y-2">
-        <p>{t.noActiveSkills}</p>
+      <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-950/40 px-4 py-8 text-center space-y-3">
+        <p className="text-sm text-zinc-400">{t.noActiveSkills}</p>
+        <Link
+          to="/insights/skills"
+          className="inline-flex min-h-[44px] items-center px-4 rounded-xl bg-indigo-600 text-sm text-white"
+        >
+          {t.goToSkills}
+        </Link>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <label className="block">
-        <span className="text-sm text-zinc-300">{t.skill}</span>
-        <select
-          className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
+    <div className="space-y-5">
+      <div>
+        <div className="text-sm text-zinc-300 mb-2">{t.pickSkill}</div>
+        <ChoiceGrid
+          items={skills.map((s) => ({ id: s.id, name: s.name, color: s.color }))}
           value={skillId}
-          onChange={(e) => setSkillId(e.target.value)}
-        >
-          {skills.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
+          onChange={setSkillId}
+        />
+      </div>
 
-      <Slider label={t.sessionDuration} value={duration} min={5} max={240} onChange={setDuration} />
+      <div>
+        <Slider
+          label={t.sessionDuration}
+          value={duration}
+          min={5}
+          max={240}
+          unit={t.minShort}
+          showMax={false}
+          onChange={setDuration}
+        />
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {DURATION_PRESETS.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setDuration(m)}
+              className={`min-h-[36px] px-2.5 rounded-full border text-xs ${
+                duration === m
+                  ? "border-indigo-500 bg-indigo-950/70 text-indigo-100"
+                  : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+              }`}
+            >
+              {m} {t.minShort}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <MetricFieldsForm schema={schema} value={customMetrics} onChange={setCustomMetrics} />
 
-      <div>
-        <label className="text-sm text-zinc-300">{t.whatWorked}</label>
-        <textarea
-          className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
-          value={whatWorked}
-          onChange={(e) => setWhatWorked(e.target.value)}
-        />
-      </div>
-      <div>
-        <label className="text-sm text-zinc-300">{t.toImprove}</label>
-        <textarea
-          className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2 h-20"
-          value={whatToImprove}
-          onChange={(e) => setWhatToImprove(e.target.value)}
-        />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="text-sm text-zinc-300">{t.whatWorked}</label>
+          <textarea
+            className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2 h-24"
+            value={whatWorked}
+            onChange={(e) => setWhatWorked(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="text-sm text-zinc-300">{t.toImprove}</label>
+          <textarea
+            className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-3 py-2 h-24"
+            value={whatToImprove}
+            onChange={(e) => setWhatToImprove(e.target.value)}
+          />
+        </div>
       </div>
 
       {err && (
-        <div className="rounded border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
+        <div className="rounded-xl border border-rose-700 bg-rose-900/30 text-rose-200 text-xs p-2">
           {err}
         </div>
       )}
@@ -134,7 +166,7 @@ export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => v
       <button
         onClick={submit}
         disabled={busy || !skillId}
-        className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
+        className="w-full min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
       >
         {busy ? "…" : t.saveSession}
       </button>

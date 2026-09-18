@@ -71,14 +71,18 @@ export default function Briefing({ entries, skills, habits, pinned }: Props) {
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {chips.map((c) => (
           <div
             key={c.k}
-            className="shrink-0 min-w-[6.5rem] rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2"
+            className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2"
           >
-            <div className="text-[10px] uppercase tracking-wide text-zinc-500">{c.label}</div>
-            <div className="text-lg font-semibold text-zinc-100">{c.v}</div>
+            <div className="text-[10px] uppercase tracking-wide text-zinc-500 truncate">
+              {c.label}
+            </div>
+            <div className="text-lg font-semibold text-zinc-100 tabular-nums leading-tight">
+              {c.v}
+            </div>
           </div>
         ))}
       </div>

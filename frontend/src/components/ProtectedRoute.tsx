@@ -4,25 +4,19 @@ import { useAuth } from "../context/AuthContext";
 import UnlockOverlay from "./UnlockOverlay";
 
 export default function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { token, kek, needsUnlock } = useAuth();
+  const { token, kek, needsUnlock, sessionExpired } = useAuth();
+
+  // JWT is dead: ask for the password again without mounting data hooks,
+  // otherwise every tab change retries 401s.
+  if (sessionExpired) return <UnlockOverlay />;
 
   // Not authenticated at all → full login flow.
   if (!token) return <Navigate to="/login" replace />;
 
   // Token + salt survived in sessionStorage but the KEK is gone (post-refresh).
-  // Render the layout underneath so the nav is visible, and overlay the
-  // password modal on top. We don't expose children here to keep encrypt/
-  // decrypt paths unreachable until the KEK is re-derived.
-  if (needsUnlock || !kek) {
-    return (
-      <>
-        <div aria-hidden className="pointer-events-none select-none opacity-40">
-          {children}
-        </div>
-        <UnlockOverlay />
-      </>
-    );
-  }
+  // Do not mount Layout/Outlet until the KEK exists — those pages fire
+  // entries/skills/habits queries even when the overlay is up.
+  if (needsUnlock || !kek) return <UnlockOverlay />;
 
   return <>{children}</>;
 }

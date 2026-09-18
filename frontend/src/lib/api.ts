@@ -18,6 +18,40 @@ export function isNetworkError(e: unknown): e is NetworkError {
   return e instanceof NetworkError;
 }
 
+/**
+ * Thrown when the server rejects the JWT (expired, rotated secret, missing
+ * Bearer). Callers must not retry: a new access token is required.
+ */
+export class AuthError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number = 401,
+  ) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+export function isAuthError(e: unknown): e is AuthError {
+  return e instanceof AuthError;
+}
+
+export const AUTH_EXPIRED_EVENT = "lifelog-auth-expired";
+
+let authExpiredNotified = false;
+
+export function resetAuthExpiredGate(): void {
+  authExpiredNotified = false;
+}
+
+function emitAuthExpired(): void {
+  if (authExpiredNotified) return;
+  authExpiredNotified = true;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+  }
+}
+
 export interface RegisterResponse {
   salt: string;
 }
@@ -112,15 +146,17 @@ async function request<T>(
     throw new NetworkError("offline");
   }
 
+  const hdrs = new Headers(headers);
+  if (token) hdrs.set("Authorization", `Bearer ${token}`);
+  if (rest.body != null && !hdrs.has("Content-Type")) {
+    hdrs.set("Content-Type", "application/json");
+  }
+
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...rest,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...headers,
-      },
+      headers: hdrs,
     });
   } catch (e) {
     // `TypeError: Failed to fetch` / ERR_INTERNET_DISCONNECTED / CORS etc.
@@ -130,8 +166,17 @@ async function request<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
+    const message = `${res.status} ${res.statusText}${text ? `: ${text}` : ""}`;
+    if (res.status === 401) {
+      // Login/register: form error. Refresh: caller falls back to login.
+      if (!path.startsWith("/api/auth/")) {
+        emitAuthExpired();
+      }
+      throw new AuthError(message, 401);
+    }
+    throw new Error(message);
   }
+  if (res.ok && token) resetAuthExpiredGate();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -148,6 +193,13 @@ export const api = {
     return request("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
+    });
+  },
+
+  async refresh(token: string): Promise<{ access_token: string; token_type: string }> {
+    return request("/api/auth/refresh", {
+      method: "POST",
+      token,
     });
   },
 

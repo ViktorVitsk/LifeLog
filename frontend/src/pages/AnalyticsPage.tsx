@@ -14,7 +14,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { metricLabel } from "../i18n/strings";
-import { api, isNetworkError } from "../lib/api";
+import { api } from "../lib/api";
 
 const PERIODS = ["7d", "30d", "90d", "1y"] as const;
 
@@ -46,17 +46,17 @@ export default function AnalyticsPage() {
   const yName = metricLabel(t, corrY);
 
   const trendsQuery = useQuery({
-    queryKey: ["analytics", "trends", token, period, metric],
+    queryKey: ["analytics", "trends", period, metric],
     enabled: Boolean(token),
     queryFn: () => api.getTrends(token!, { metric, period }),
-    retry: (n, e) => !isNetworkError(e) && n < 1,
+    retry: false,
   });
 
   const corrQuery = useQuery({
-    queryKey: ["analytics", "corr", token, period, corrX, corrY],
+    queryKey: ["analytics", "corr", period, corrX, corrY],
     enabled: Boolean(token),
     queryFn: () => api.getCorrelations(token!, { x: corrX, y: corrY, period }),
-    retry: (n, e) => !isNetworkError(e) && n < 1,
+    retry: false,
   });
 
   const trendChartData = useMemo(

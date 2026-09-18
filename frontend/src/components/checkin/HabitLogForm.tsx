@@ -1,20 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useLocale } from "../../context/LocaleContext";
-import { api } from "../../lib/api";
+import { useHabits } from "../../hooks/useCatalog";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import { ChoiceGrid, Segmented } from "../ui/ChoiceGrid";
 
 export default function HabitLogForm({ onSubmitted }: { onSubmitted: () => void }) {
-  const { kek, token } = useAuth();
+  const { kek } = useAuth();
   const { t } = useLocale();
-  const habitsQuery = useQuery({
-    queryKey: ["habits", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listHabits(token!),
-  });
+  const habitsQuery = useHabits();
 
   const habits = useMemo(
     () => (habitsQuery.data ?? []).filter((h) => h.is_active),

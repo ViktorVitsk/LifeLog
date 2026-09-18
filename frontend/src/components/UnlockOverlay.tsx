@@ -3,13 +3,13 @@ import { useAuth, WrongPasswordError } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 
 /**
- * Modal shown after a same-tab refresh: the JWT and the user's salt are
- * still in sessionStorage, but the in-memory KEK is gone. We ask for the
- * master password, re-derive the KEK locally (no network needed), and
- * verify it against any existing local entry before accepting.
+ * Modal shown when:
+ * - same-tab refresh wiped the in-memory KEK, or
+ * - the JWT expired / was rejected and we need a new access token.
+ * Unlocking is local (PBKDF2). Re-auth hits /api/auth/login.
  */
 export default function UnlockOverlay() {
-  const { username, unlock, logout } = useAuth();
+  const { username, unlock, reauthenticate, logout, sessionExpired } = useAuth();
   const { t } = useLocale();
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,7 +21,8 @@ export default function UnlockOverlay() {
     setError(null);
     setBusy(true);
     try {
-      await unlock(password);
+      if (sessionExpired) await reauthenticate(password);
+      else await unlock(password);
       setPassword("");
     } catch (e) {
       if (e instanceof WrongPasswordError) {
@@ -45,8 +46,12 @@ export default function UnlockOverlay() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
       >
         <div>
-          <h2 className="text-lg font-semibold">{t.unlockTitle}</h2>
-          <p className="text-sm text-zinc-400 mt-1">{t.unlockBody}</p>
+          <h2 className="text-lg font-semibold">
+            {sessionExpired ? t.sessionExpiredTitle : t.unlockTitle}
+          </h2>
+          <p className="text-sm text-zinc-400 mt-1">
+            {sessionExpired ? t.sessionExpiredBody : t.unlockBody}
+          </p>
           {username && (
             <p className="text-xs text-zinc-500 mt-2">
               {t.unlockLoggedIn} <span className="text-zinc-300">{username}</span>.
@@ -76,7 +81,7 @@ export default function UnlockOverlay() {
             disabled={busy || password.length < 8}
             className="flex-1 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white"
           >
-            {busy ? "…" : t.unlockSubmit}
+            {busy ? "…" : sessionExpired ? t.sessionExpiredSubmit : t.unlockSubmit}
           </button>
           <button
             type="button"

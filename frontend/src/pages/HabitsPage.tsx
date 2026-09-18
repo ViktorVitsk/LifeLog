@@ -1,10 +1,11 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import HabitHeatmap from "../components/habits/HabitHeatmap";
 import HabitLogHistory from "../components/habits/HabitLogHistory";
 import { ColorDots, Segmented } from "../components/ui/ChoiceGrid";
+import { useHabits } from "../hooks/useCatalog";
 import { useEntries } from "../hooks/useEntries";
 import { api, isNetworkError, type Habit, type HabitFrequency } from "../lib/api";
 
@@ -14,11 +15,7 @@ export default function HabitsPage() {
   const qc = useQueryClient();
   const { entries } = useEntries();
 
-  const habitsQuery = useQuery({
-    queryKey: ["habits", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listHabits(token!),
-  });
+  const habitsQuery = useHabits();
 
   const habits = habitsQuery.data ?? [];
   const active = useMemo(() => habits.filter((h) => h.is_active), [habits]);

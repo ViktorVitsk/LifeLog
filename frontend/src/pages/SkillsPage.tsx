@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
@@ -6,6 +6,7 @@ import SkillSessionChart from "../components/skills/SkillSessionChart";
 import SkillSessionHistory from "../components/skills/SkillSessionHistory";
 import MetricSchemaBuilder from "../components/skills/MetricSchemaBuilder";
 import { ColorDots } from "../components/ui/ChoiceGrid";
+import { useSkills } from "../hooks/useCatalog";
 import { useEntries } from "../hooks/useEntries";
 import { api, isNetworkError, type Skill } from "../lib/api";
 import { EMPTY_METRIC_SCHEMA, parseMetricSchema, type MetricSchema } from "../lib/metricSchema";
@@ -16,11 +17,7 @@ export default function SkillsPage() {
   const qc = useQueryClient();
   const { entries } = useEntries();
 
-  const skillsQuery = useQuery({
-    queryKey: ["skills", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listSkills(token!),
-  });
+  const skillsQuery = useSkills();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);

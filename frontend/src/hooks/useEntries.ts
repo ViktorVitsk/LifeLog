@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useMemo } from "react";
-import { useAuth } from "../context/AuthContext";
+import { getSessionToken, useAuth } from "../context/AuthContext";
 import { db, type PendingEntry } from "../db/offlineQueue";
-import { api, type EntryRead } from "../lib/api";
+import { api, AuthError, type EntryRead } from "../lib/api";
 
 /**
  * Unified entry stream: server (synced) + local Dexie (pending/error).
@@ -34,11 +34,13 @@ export function useEntries() {
   const { token } = useAuth();
 
   const serverQuery = useQuery<EntryRead[]>({
-    queryKey: ["entries", token ? "auth" : "anon"],
+    queryKey: ["entries"],
     enabled: Boolean(token),
-    queryFn: () => api.listEntries(token!, { limit: 1000 }),
-    staleTime: 15_000,
-    refetchOnWindowFocus: false,
+    queryFn: () => {
+      const t = getSessionToken();
+      if (!t) throw new AuthError("session expired");
+      return api.listEntries(t, { limit: 1000 });
+    },
   });
 
   const local = useLiveQuery(() => db.entries.toArray(), [], [] as PendingEntry[]);

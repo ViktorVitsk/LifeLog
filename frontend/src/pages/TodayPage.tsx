@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listPinnedCharts, loadThreadForDay, saveThreadMessage } from "../agent/chatStore";
 import { commitProposedEntry } from "../agent/commit";
@@ -22,6 +22,7 @@ import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useSync } from "../context/SyncContext";
 import { deleteLocalEntries } from "../db/offlineQueue";
+import { useHabits, useSkills } from "../hooks/useCatalog";
 import { useEntries } from "../hooks/useEntries";
 import { useIsMdUp } from "../hooks/useIsMdUp";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
@@ -37,16 +38,8 @@ export default function TodayPage() {
   const kb = useKeyboardInset();
   const tabBarVisible = !md && kb < 80;
 
-  const skillsQ = useQuery({
-    queryKey: ["skills", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listSkills(token!),
-  });
-  const habitsQ = useQuery({
-    queryKey: ["habits", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listHabits(token!),
-  });
+  const skillsQ = useSkills();
+  const habitsQ = useHabits();
 
   const [settings, setSettings] = useState<LlmSettings>({ ...DEFAULT_LLM_SETTINGS });
   const [thread, setThread] = useState<ThreadMessage[]>([]);

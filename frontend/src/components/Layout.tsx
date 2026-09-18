@@ -145,7 +145,7 @@ function SyncBadge({
       </span>
     );
   }
-  if (result?.error && result.error !== "offline") {
+  if (result?.error && result.error !== "offline" && result.error !== "auth") {
     return (
       <span className="px-2 py-1 rounded bg-rose-900/40 border border-rose-700 text-rose-200">
         sync: {result.error}

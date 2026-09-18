@@ -27,6 +27,10 @@ export const STRINGS = {
     unlockLoggedIn: "Вы вошли как",
     wrongPassword: "Неверный пароль.",
     unlockSubmit: "Разблокировать",
+    sessionExpiredTitle: "Сессия истекла",
+    sessionExpiredBody:
+      "Токен доступа больше не действует. Введите мастер-пароль, чтобы продолжить без потери данных на этом устройстве.",
+    sessionExpiredSubmit: "Войти снова",
     today: "Сегодня",
     manualForms: "Формы вручную",
     mood: "Настроение",
@@ -435,6 +439,10 @@ export const STRINGS = {
     unlockLoggedIn: "Logged in as",
     wrongPassword: "Wrong password.",
     unlockSubmit: "Unlock",
+    sessionExpiredTitle: "Session expired",
+    sessionExpiredBody:
+      "Your access token is no longer valid. Enter the master password to continue — local data stays on this device.",
+    sessionExpiredSubmit: "Sign in again",
     today: "Today",
     manualForms: "Manual forms",
     mood: "Mood",

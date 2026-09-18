@@ -23,12 +23,15 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const triggerRef = useRef<(() => void) | null>(null);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const authed = Boolean(token);
 
   useEffect(() => {
-    if (!token) return;
+    if (!authed) return;
 
     const handle = startSyncManager({
-      getToken: () => token,
+      getToken: () => tokenRef.current,
       onResult: (r) => {
         if (r.attempted > 0 || r.error) setLastResult(r);
         if (r.saved > 0) {
@@ -42,7 +45,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       triggerRef.current = null;
       handle.stop();
     };
-  }, [token, qc]);
+  }, [authed, qc]);
 
   return (
     <SyncContext.Provider

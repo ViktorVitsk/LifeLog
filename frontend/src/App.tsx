@@ -4,7 +4,7 @@ import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { LocaleProvider } from "./context/LocaleContext";
-import { isNetworkError } from "./lib/api";
+import { isAuthError, isNetworkError } from "./lib/api";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import CheckinPage from "./pages/CheckinPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -20,10 +20,14 @@ import TodayPage from "./pages/TodayPage";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: (failureCount, error) => !isNetworkError(error) && failureCount < 1,
+      staleTime: 60_000,
+      retry: (failureCount, error) =>
+        !isNetworkError(error) && !isAuthError(error) && failureCount < 1,
+      retryOnMount: false,
       networkMode: "offlineFirst",
       refetchOnWindowFocus: false,
-      refetchOnReconnect: true,
+      refetchOnMount: (query) => !isAuthError(query.state.error),
+      refetchOnReconnect: (query) => !isAuthError(query.state.error),
     },
   },
 });

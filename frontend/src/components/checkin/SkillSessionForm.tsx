@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useLocale } from "../../context/LocaleContext";
-import { api } from "../../lib/api";
+import { useSkills } from "../../hooks/useCatalog";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
 import {
   emptyCustomMetrics,
@@ -17,13 +16,9 @@ import Slider from "../ui/Slider";
 const DURATION_PRESETS = [15, 30, 45, 60, 90, 120];
 
 export default function SkillSessionForm({ onSubmitted }: { onSubmitted: () => void }) {
-  const { kek, token } = useAuth();
+  const { kek } = useAuth();
   const { t } = useLocale();
-  const skillsQuery = useQuery({
-    queryKey: ["skills", token],
-    enabled: Boolean(token),
-    queryFn: () => api.listSkills(token!),
-  });
+  const skillsQuery = useSkills();
 
   const skills = useMemo(
     () => (skillsQuery.data ?? []).filter((s) => s.is_active),

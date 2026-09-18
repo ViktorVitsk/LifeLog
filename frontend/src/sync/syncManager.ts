@@ -1,5 +1,5 @@
 import { getPendingForSync, markError, markSynced } from "../db/offlineQueue";
-import { api, isNetworkError, type EntrySyncPayload } from "../lib/api";
+import { api, isAuthError, isNetworkError, type EntrySyncPayload } from "../lib/api";
 
 /**
  * Tries to push every pending entry to the server in a single batched POST.
@@ -71,6 +71,14 @@ export async function runSyncOnce(token: string): Promise<SyncResult> {
         saved: 0,
         failed: 0,
         error: "offline",
+      };
+    }
+    if (isAuthError(e)) {
+      return {
+        attempted: pending.length,
+        saved: 0,
+        failed: 0,
+        error: "auth",
       };
     }
     const msg = (e as Error).message ?? "sync failed";

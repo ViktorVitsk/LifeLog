@@ -80,6 +80,8 @@ class EntrySyncItem(BaseModel):
     encrypted_content: str = ""
     version: int | None = None
     deleted: bool = False
+    recorded_at: datetime | None = None
+    event_timezone: str | None = None
 
 
 class EntrySyncRequest(BaseModel):
@@ -108,3 +110,5 @@ class EntryRead(EntryBase):
     created_at: datetime
     synced_from_offline: bool
     version: int = 1
+    recorded_at: datetime | None = None
+    event_timezone: str | None = None

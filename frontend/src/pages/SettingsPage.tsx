@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useEntries, type MergedEntry } from "../hooks/useEntries";
 import { api } from "../lib/api";
+import { COMMON_TIMEZONES } from "../lib/dates";
 import { decryptEntry } from "../lib/crypto";
 
 function downloadJson(filename: string, data: unknown) {
@@ -26,7 +27,7 @@ function stripCipher(e: MergedEntry) {
 }
 
 export default function SettingsPage() {
-  const { token, kek, logout, username } = useAuth();
+  const { token, kek, logout, username, timezone, updateTimezone } = useAuth();
   const { t } = useLocale();
   const { entries } = useEntries();
   const [msg, setMsg] = useState<string | null>(null);
@@ -125,6 +126,24 @@ export default function SettingsPage() {
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
         <h2 className="text-sm font-medium text-zinc-200">{t.language}</h2>
         <LanguageSelect hideLabel />
+        <label className="block text-sm">
+          {t.timezone}
+          <select
+            className="mt-1 w-full min-h-[44px] rounded bg-zinc-950 border border-zinc-700 px-3"
+            value={timezone}
+            onChange={(e) => void updateTimezone(e.target.value).then(() => setMsg(t.timezoneSaved)).catch((err) => setMsg((err as Error).message))}
+          >
+            {!COMMON_TIMEZONES.includes(timezone as (typeof COMMON_TIMEZONES)[number]) && timezone && (
+              <option value={timezone}>{timezone}</option>
+            )}
+            {COMMON_TIMEZONES.map((zone) => (
+              <option key={zone} value={zone}>
+                {zone}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="text-xs text-zinc-500">{t.timezoneHint}</p>
       </section>
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">

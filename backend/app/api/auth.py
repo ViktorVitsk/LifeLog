@@ -22,7 +22,9 @@ from app.schemas.auth import (
     RefreshResponse,
     RegisterRequest,
     RegisterResponse,
+    TimezonePut,
 )
+from app.services.calendar_days import DEFAULT_TIMEZONE, validate_timezone
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -31,10 +33,17 @@ logger = logging.getLogger(__name__)
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> RegisterResponse:
     salt = generate_pbkdf2_salt()
+    zone = DEFAULT_TIMEZONE
+    if payload.timezone:
+        try:
+            zone = validate_timezone(payload.timezone)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_timezone") from None
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
         password_salt=salt,
+        timezone=zone,
     )
     db.add(user)
     try:
@@ -89,9 +98,11 @@ async def me(
             content, dek = row[0], row[1]
     except ProgrammingError:
         await db.rollback()
+    zone = getattr(current_user, "timezone", None) or DEFAULT_TIMEZONE
     return MeResponse(
         id=current_user.id,
         username=current_user.username,
+        timezone=zone,
         encrypted_kek_verifier_content=content,
         encrypted_kek_verifier_dek=dek,
     )
@@ -127,3 +138,19 @@ async def put_kek_verifier(
     if result.rowcount == 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Verifier already set")
     logger.info("kek verifier stored user=%s", current_user.id)
+
+
+@router.put("/timezone", response_model=MeResponse)
+async def put_timezone(
+    payload: TimezonePut,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    try:
+        zone = validate_timezone(payload.timezone)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_timezone") from None
+    current_user.timezone = zone
+    await db.commit()
+    await db.refresh(current_user)
+    return MeResponse(id=current_user.id, username=current_user.username, timezone=zone)

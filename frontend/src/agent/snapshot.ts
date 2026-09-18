@@ -2,7 +2,7 @@ import type { Habit, Skill } from "../lib/api";
 import type { MergedEntry } from "../hooks/useEntries";
 import type { AppLocale } from "../i18n/locale";
 import { STRINGS } from "../i18n/strings";
-import { isSameLocalDay, localDayKey, startOfLocalDay } from "../lib/dates";
+import { getAccountTimeZone, isSameLocalDay, localDayKey, startOfLocalDay } from "../lib/dates";
 
 export function buildTodaySnapshot(args: {
   entries: MergedEntry[];
@@ -13,7 +13,9 @@ export function buildTodaySnapshot(args: {
   const t = STRINGS[args.locale ?? "ru"];
   const day = localDayKey();
   const start = startOfLocalDay();
-  const today = args.entries.filter((e) => isSameLocalDay(e.timestamp, day));
+  const today = args.entries.filter((e) =>
+    isSameLocalDay(e.timestamp, day, e.event_timezone || getAccountTimeZone()),
+  );
 
   const avg = (xs: number[]) =>
     xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length) * 10) / 10 : null;

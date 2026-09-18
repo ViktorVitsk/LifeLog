@@ -1,25 +1,28 @@
 """
 Aggregated analytics on **open** numeric fields only.
 The server never touches ciphertext.
+Days are account-local (IANA), not UTC date_trunc.
 """
 
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import Entry, User
+from app.services.calendar_days import DEFAULT_TIMEZONE, entry_calendar_day
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 PERIOD_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90, "1y": 365}
 
-TREND_METRICS: dict[str, object] = {
+TREND_METRICS: dict[str, Any] = {
     "mood_score": Entry.mood_score,
     "energy_score": Entry.energy_score,
     "anxiety_score": Entry.anxiety_score,
@@ -40,7 +43,7 @@ TREND_METRICS: dict[str, object] = {
 
 
 class TrendPoint(BaseModel):
-    day: str = Field(description="UTC calendar day (YYYY-MM-DD) from date_trunc")
+    day: str = Field(description="Account-local calendar day YYYY-MM-DD")
     value: float
 
 
@@ -55,11 +58,17 @@ def _since_utc(period: str) -> datetime:
     return datetime.now(UTC) - timedelta(days=days)
 
 
-def _bucket_day(row_ts: datetime) -> str:
-    """Normalize SQLAlchemy / asyncpg timestamp to YYYY-MM-DD (UTC)."""
-    if row_ts.tzinfo is None:
-        row_ts = row_ts.replace(tzinfo=UTC)
-    return row_ts.astimezone(UTC).date().isoformat()
+def _account_tz(user: User) -> str:
+    return getattr(user, "timezone", None) or DEFAULT_TIMEZONE
+
+
+def _day_of(row: Entry, tz: str) -> str:
+    return entry_calendar_day(
+        timestamp=row.timestamp,
+        entry_type=str(row.entry_type),
+        sleep_hours=row.sleep_hours,
+        time_zone=row.event_timezone or tz,
+    )
 
 
 @router.get("/trends", response_model=list[TrendPoint])
@@ -73,26 +82,25 @@ async def get_trends(
         raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
     col = TREND_METRICS[metric]
     since = _since_utc(period)
-    bucket = func.date_trunc("day", Entry.timestamp).label("bucket")
-
-    stmt = (
-        select(bucket, func.avg(col).label("avg_val"))
-        .where(
-            Entry.user_id == current_user.id,
-            Entry.deleted_at.is_(None),
-            Entry.timestamp >= since,
-            col.isnot(None),
-        )
-        .group_by(bucket)
-        .order_by(bucket)
+    tz = _account_tz(current_user)
+    stmt = select(Entry).where(
+        Entry.user_id == current_user.id,
+        Entry.deleted_at.is_(None),
+        Entry.timestamp >= since,
+        col.isnot(None),
     )
-    result = await db.execute(stmt)
-    out: list[TrendPoint] = []
-    for b, avg_val in result.all():
-        if b is None or avg_val is None:
+    rows = (await db.execute(stmt)).scalars().all()
+    buckets: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        value = getattr(row, metric)
+        if value is None:
             continue
-        out.append(TrendPoint(day=_bucket_day(b), value=float(avg_val)))
-    return out
+        buckets[_day_of(row, tz)].append(float(value))
+    return [
+        TrendPoint(day=day, value=sum(vals) / len(vals))
+        for day, vals in sorted(buckets.items())
+        if vals
+    ]
 
 
 @router.get("/correlations", response_model=list[CorrelationPoint])
@@ -108,42 +116,26 @@ async def get_correlations(
     if x == y:
         raise HTTPException(status_code=400, detail="x and y must differ")
 
-    xcol = TREND_METRICS[x]
-    ycol = TREND_METRICS[y]
     since = _since_utc(period)
-
-    bx = func.date_trunc("day", Entry.timestamp).label("d")
-    sub_x = (
-        select(bx, func.avg(xcol).label("xv"))
-        .where(
-            Entry.user_id == current_user.id,
-            Entry.deleted_at.is_(None),
-            Entry.timestamp >= since,
-            xcol.isnot(None),
-        )
-        .group_by(bx)
-    ).subquery()
-
-    by = func.date_trunc("day", Entry.timestamp).label("d")
-    sub_y = (
-        select(by, func.avg(ycol).label("yv"))
-        .where(
-            Entry.user_id == current_user.id,
-            Entry.deleted_at.is_(None),
-            Entry.timestamp >= since,
-            ycol.isnot(None),
-        )
-        .group_by(by)
-    ).subquery()
-
-    stmt = (
-        select(sub_x.c.d, sub_x.c.xv, sub_y.c.yv)
-        .select_from(sub_x.join(sub_y, sub_x.c.d == sub_y.c.d))
-        .order_by(sub_x.c.d)
+    tz = _account_tz(current_user)
+    stmt = select(Entry).where(
+        Entry.user_id == current_user.id,
+        Entry.deleted_at.is_(None),
+        Entry.timestamp >= since,
     )
-    result = await db.execute(stmt)
+    rows = (await db.execute(stmt)).scalars().all()
+    xs: dict[str, list[float]] = defaultdict(list)
+    ys: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        day = _day_of(row, tz)
+        xv = getattr(row, x)
+        yv = getattr(row, y)
+        if xv is not None:
+            xs[day].append(float(xv))
+        if yv is not None:
+            ys[day].append(float(yv))
+    joint = sorted(set(xs) & set(ys))
     return [
-        CorrelationPoint(day=_bucket_day(d), x=float(xv), y=float(yv))
-        for d, xv, yv in result.all()
-        if d is not None and xv is not None and yv is not None
+        CorrelationPoint(day=day, x=sum(xs[day]) / len(xs[day]), y=sum(ys[day]) / len(ys[day]))
+        for day in joint
     ]

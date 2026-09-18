@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, SmallInteger, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +41,8 @@ class Entry(Base):
         nullable=False,
         index=True,
     )
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     entry_type: Mapped[EntryType] = mapped_column(
         # Stored as VARCHAR in Postgres — avoids Alembic ENUM migration pain
         # while still constrained by the Python StrEnum at the app layer.

@@ -1,4 +1,4 @@
-import { localDayKey, startOfLocalDay } from "../lib/dates.ts";
+import { getAccountTimeZone, localDayKey, startOfLocalDay } from "../lib/dates.ts";
 import type { MergedEntry } from "../hooks/useEntries.ts";
 import type { ContextPolicy, LlmSettings } from "./types.ts";
 
@@ -62,9 +62,13 @@ export interface ContextBudget {
 
 const MS_DAY = 24 * 3600_000;
 
-export function resolveContextEnvelope(settings: LlmSettings, now = new Date()): ContextEnvelope {
+export function resolveContextEnvelope(
+  settings: LlmSettings,
+  now = new Date(),
+  timeZone = getAccountTimeZone(),
+): ContextEnvelope {
   const end = now;
-  const startToday = startOfLocalDay(now);
+  const startToday = startOfLocalDay(now, timeZone);
   if (settings.context_policy === "today") {
     return {
       policy: "today",

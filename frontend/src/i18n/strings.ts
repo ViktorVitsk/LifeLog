@@ -3,6 +3,9 @@ import type { AppLocale } from "./locale";
 export const STRINGS = {
   ru: {
     language: "Язык",
+    timezone: "Часовой пояс",
+    timezoneHint: "Дни и «вчера вечером» считаются в этом поясе. Старые записи хранят пояс события отдельно.",
+    timezoneSaved: "Пояс сохранён.",
     tabToday: "Сегодня",
     tabTimeline: "Лента",
     tabInsights: "Обзор",
@@ -432,6 +435,9 @@ export const STRINGS = {
   },
   en: {
     language: "Language",
+    timezone: "Time zone",
+    timezoneHint: "Calendar days and “yesterday evening” use this zone. Older rows keep their own event zone.",
+    timezoneSaved: "Time zone saved.",
     tabToday: "Today",
     tabTimeline: "Timeline",
     tabInsights: "Insights",

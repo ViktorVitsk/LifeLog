@@ -3,6 +3,7 @@ import { appConfirmation } from "../agent/confirmation";
 import { encryptEntry } from "./crypto";
 import type { EntrySyncPayload } from "./api";
 import { assertEncryptAllowed } from "./accountScope";
+import { getAccountTimeZone } from "./dates";
 
 export async function encryptAndEnqueue(args: {
   kek: CryptoKey;
@@ -65,6 +66,8 @@ export async function encryptAndEnqueue(args: {
     context_id: openFields.context_id ?? null,
     encrypted_content: encryptedContent,
     encrypted_dek: encryptedDek,
+    recorded_at: new Date().toISOString(),
+    event_timezone: getAccountTimeZone(),
   };
 
   await enqueueEntry(payload);

@@ -65,6 +65,7 @@ export interface LoginResponse {
 export interface MeResponse {
   id: string;
   username: string;
+  timezone?: string;
   encrypted_kek_verifier_content?: string | null;
   encrypted_kek_verifier_dek?: string | null;
 }
@@ -98,6 +99,8 @@ export interface EntrySyncPayload {
   encrypted_content: string;
   version?: number | null;
   deleted?: boolean;
+  recorded_at?: string | null;
+  event_timezone?: string | null;
 }
 
 export interface EntryRead extends EntrySyncPayload {
@@ -191,10 +194,10 @@ async function request<T>(
 }
 
 export const api = {
-  async register(username: string, password: string): Promise<RegisterResponse> {
+  async register(username: string, password: string, timezone?: string): Promise<RegisterResponse> {
     return request("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, timezone }),
     });
   },
 
@@ -214,6 +217,14 @@ export const api = {
 
   async me(token: string): Promise<MeResponse> {
     return request("/api/auth/me", { token });
+  },
+
+  async putTimezone(token: string, timezone: string): Promise<MeResponse> {
+    return request("/api/auth/timezone", {
+      method: "PUT",
+      token,
+      body: JSON.stringify({ timezone }),
+    });
   },
 
   async putKekVerifier(

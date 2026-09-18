@@ -59,6 +59,8 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
     encrypted_content: p.encrypted_content,
     version: p.version ?? 1,
     deleted: p.status === "pending_delete" || p.deleted === true,
+    recorded_at: p.recorded_at,
+    event_timezone: p.event_timezone,
   }));
 
   try {

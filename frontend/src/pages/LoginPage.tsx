@@ -4,6 +4,7 @@ import LanguageSelect from "../components/LanguageSelect";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { api } from "../lib/api";
+import { browserTimeZone } from "../lib/dates";
 
 type Mode = "login" | "register";
 
@@ -25,7 +26,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       if (mode === "register") {
-        await api.register(username, password);
+        await api.register(username, password, browserTimeZone());
       }
       const res = await api.login(username, password);
       await auth.setAuthenticated(username, res.access_token, password, res.salt);

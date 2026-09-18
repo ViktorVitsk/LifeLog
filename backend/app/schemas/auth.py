@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=256)
+    timezone: str | None = Field(default=None, max_length=64)
 
 
 class RegisterResponse(BaseModel):
@@ -35,8 +36,13 @@ class RefreshResponse(BaseModel):
 class MeResponse(BaseModel):
     id: UUID
     username: str
+    timezone: str = "UTC"
     encrypted_kek_verifier_content: str | None = None
     encrypted_kek_verifier_dek: str | None = None
+
+
+class TimezonePut(BaseModel):
+    timezone: str = Field(min_length=1, max_length=64)
 
 
 class KekVerifierPut(BaseModel):

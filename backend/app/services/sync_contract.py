@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from app.enums import EntryType
+from app.services.calendar_days import validate_timezone
 
 SYNC_CREATED = "created"
 SYNC_DUPLICATE = "duplicate"
@@ -111,6 +112,20 @@ def validate_incoming(data: Mapping[str, Any]) -> str | None:
         return "invalid_timestamp"
     if ts.tzinfo is None:
         return "naive_timestamp"
+
+    recorded = data.get("recorded_at")
+    if recorded is not None:
+        if not isinstance(recorded, datetime) or recorded.tzinfo is None:
+            return "naive_timestamp"
+
+    zone = data.get("event_timezone")
+    if zone is not None:
+        if not isinstance(zone, str) or not zone.strip():
+            return "invalid_timezone"
+        try:
+            validate_timezone(zone)
+        except ValueError:
+            return "invalid_timezone"
 
     entry_type = _entry_type_value(data.get("entry_type"))
     if entry_type not in {item.value for item in EntryType}:

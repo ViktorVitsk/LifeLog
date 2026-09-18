@@ -69,7 +69,7 @@ export async function commitProposedEntry(
       return encryptAndEnqueue({
         kek,
         entry_type: p.entry_type,
-        timestamp: ts,
+        timestamp: p.wake_time && p.wake_time.includes("T") ? p.wake_time : ts,
         plaintext: {
           bedtime: p.bedtime,
           wake_time: p.wake_time,

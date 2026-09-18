@@ -22,6 +22,7 @@ import {
   setEncryptAllowed,
 } from "../lib/accountScope";
 import { establishKek, KeyUnverifiedError } from "../lib/kekUnlock";
+import { setAccountTimeZone } from "../lib/dates";
 
 const SESSION_STORAGE_KEY = "lifelog.session";
 const REFRESH_SKEW_MS = 90_000;
@@ -41,6 +42,7 @@ export interface AuthState {
   userId: string | null;
   sessionExpired: boolean;
   kekVerified: boolean;
+  timezone: string;
 }
 
 export interface AuthContextValue extends AuthState {
@@ -53,6 +55,7 @@ export interface AuthContextValue extends AuthState {
   unlock: (password: string) => Promise<void>;
   reauthenticate: (password: string) => Promise<void>;
   logout: () => void;
+  updateTimezone: (timezone: string) => Promise<void>;
   isFullyAuthenticated: boolean;
   needsUnlock: boolean;
 }
@@ -135,16 +138,20 @@ export class WrongPasswordError extends Error {
 
 export { KeyUnverifiedError };
 
-async function resolveUserId(token: string): Promise<string> {
+async function resolveUserId(token: string): Promise<{ userId: string; timezone: string }> {
   try {
     const me = await api.me(token);
-    if (me?.id) return me.id;
+    if (me?.id) {
+      const timezone = me.timezone || "UTC";
+      setAccountTimeZone(timezone);
+      return { userId: me.id, timezone };
+    }
   } catch {
     /* fall through to JWT */
   }
   const sub = jwtSub(token);
   if (!sub) throw new Error("missing_user_id");
-  return sub;
+  return { userId: sub, timezone: "UTC" };
 }
 
 function applyScope(userId: string | null, encryptOk: boolean) {
@@ -168,6 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userId: persisted?.userId ?? null,
       sessionExpired: false,
       kekVerified: false,
+      timezone: "UTC",
     };
   });
 
@@ -179,7 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setAuthenticated = useCallback(
     async (username: string, token: string, password: string, saltHex: string) => {
-      const userId = await resolveUserId(token);
+      const { userId, timezone } = await resolveUserId(token);
       applyScope(userId, false);
       const kek = await deriveKEK(password, saltHex);
       const result = await establishKek({ kek, token, userId, allowBootstrap: true });
@@ -197,6 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userId,
         sessionExpired: false,
         kekVerified: true,
+        timezone,
       });
     },
     [queryClient],
@@ -229,6 +238,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applyScope(persisted.userId, true);
     resetAuthExpiredGate();
     writePersisted({ ...persisted, token });
+    let timezone = "UTC";
+    try {
+      const me = await api.me(token);
+      timezone = me.timezone || timezone;
+      setAccountTimeZone(timezone);
+    } catch {
+      /* keep UTC */
+    }
     setState({
       token,
       username: persisted.username,
@@ -237,6 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       kek,
       sessionExpired: false,
       kekVerified: true,
+      timezone,
     });
   }, []);
 
@@ -267,6 +285,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       salt: res.salt || salt,
       userId,
     });
+    let timezone = state.timezone || "UTC";
+    try {
+      const me = await api.me(res.access_token);
+      timezone = me.timezone || timezone;
+      setAccountTimeZone(timezone);
+    } catch {
+      /* keep previous */
+    }
     setState({
       token: res.access_token,
       kek,
@@ -275,6 +301,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userId,
       sessionExpired: false,
       kekVerified: true,
+      timezone,
     });
     await queryClient.invalidateQueries();
   }, [queryClient, state.salt, state.username, state.userId]);
@@ -292,7 +319,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userId: null,
       sessionExpired: false,
       kekVerified: false,
+      timezone: "UTC",
     });
+    setAccountTimeZone("UTC");
   }, [queryClient]);
 
   const markSessionExpired = useCallback(() => {
@@ -349,6 +378,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [state.token, state.sessionExpired, applyToken, markSessionExpired]);
 
+  const updateTimezone = useCallback(
+    async (timezone: string) => {
+      if (!state.token) throw new Error("not authenticated");
+      const me = await api.putTimezone(state.token, timezone);
+      const zone = me.timezone || timezone;
+      setAccountTimeZone(zone);
+      setState((s) => ({ ...s, timezone: zone }));
+    },
+    [state.token],
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       ...state,
@@ -356,6 +396,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unlock,
       reauthenticate,
       logout,
+      updateTimezone,
       isFullyAuthenticated: Boolean(
         state.token && state.kek && state.kekVerified && !state.sessionExpired,
       ),
@@ -363,7 +404,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         state.token && state.salt && (!state.kek || !state.kekVerified) && !state.sessionExpired,
       ),
     }),
-    [state, setAuthenticated, unlock, reauthenticate, logout],
+    [state, setAuthenticated, unlock, reauthenticate, logout, updateTimezone],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

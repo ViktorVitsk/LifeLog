@@ -18,6 +18,7 @@ from app.schemas.entry import (
     EntrySyncResponse,
     SyncItemResult,
 )
+from app.services.calendar_days import DEFAULT_TIMEZONE, validate_timezone
 from app.services.sync_contract import decide_sync_item
 
 router = APIRouter(prefix="/api/entries", tags=["entries"])
@@ -56,10 +57,12 @@ def _entry_as_dict(row: Entry) -> dict:
         "version": row.version,
         "deleted_at": row.deleted_at,
         "deleted": row.deleted_at is not None,
+        "recorded_at": row.recorded_at,
+        "event_timezone": row.event_timezone,
     }
 
 
-def _row_values(item: EntrySyncItem, user_id: UUID) -> dict:
+def _row_values(item: EntrySyncItem, user_id: UUID, account_tz: str) -> dict:
     return {
         "id": item.id,
         "user_id": user_id,
@@ -91,6 +94,8 @@ def _row_values(item: EntrySyncItem, user_id: UUID) -> dict:
         "synced_from_offline": True,
         "version": 1,
         "deleted_at": None,
+        "recorded_at": item.recorded_at or datetime.now(UTC),
+        "event_timezone": item.event_timezone or account_tz,
     }
 
 
@@ -109,6 +114,11 @@ async def sync_entries(
         return EntrySyncResponse(results=[], saved=[], errors=[])
 
     user_id = current_user.id
+    account_tz = getattr(current_user, "timezone", None) or DEFAULT_TIMEZONE
+    try:
+        validate_timezone(account_tz)
+    except ValueError:
+        account_tz = DEFAULT_TIMEZONE
     incoming_ids = [item.id for item in payload.entries]
     existing_rows = (
         await db.execute(select(Entry).where(Entry.id.in_(incoming_ids)))
@@ -165,7 +175,7 @@ async def sync_entries(
 
         try:
             async with db.begin_nested():
-                db.add(Entry(**_row_values(item, user_id)))
+                db.add(Entry(**_row_values(item, user_id, account_tz)))
                 await db.flush()
             results.append(SyncItemResult(id=item.id, status="created"))
             existing_by_id[item.id] = {**incoming, "user_id": user_id, "version": 1, "deleted_at": None}

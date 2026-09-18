@@ -46,7 +46,7 @@ function LayoutInner() {
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
         <div className="max-w-5xl mx-auto px-6 py-3 flex items-center gap-4">
           <div className="font-semibold tracking-tight">LifeLog</div>
-          <nav className="flex gap-1">
+          <nav className="flex flex-wrap gap-1">
             <NavLink to="/checkin" className={linkCls}>
               Check-in
             </NavLink>
@@ -61,6 +61,15 @@ function LayoutInner() {
             </NavLink>
             <NavLink to="/habits" className={linkCls}>
               Habits
+            </NavLink>
+            <NavLink to="/analytics" className={linkCls}>
+              Analytics
+            </NavLink>
+            <NavLink to="/journal" className={linkCls}>
+              Journal
+            </NavLink>
+            <NavLink to="/settings" className={linkCls}>
+              Settings
             </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-zinc-400">

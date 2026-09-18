@@ -39,6 +39,8 @@ export async function encryptAndEnqueue(args: {
     stress_score: openFields.stress_score ?? null,
     sleep_hours: openFields.sleep_hours ?? null,
     sleep_quality: openFields.sleep_quality ?? null,
+    weight_kg: openFields.weight_kg ?? null,
+    body_fat_pct: openFields.body_fat_pct ?? null,
     session_duration_min: openFields.session_duration_min ?? null,
     habit_completed: openFields.habit_completed ?? null,
     habit_value: openFields.habit_value ?? null,

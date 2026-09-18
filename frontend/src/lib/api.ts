@@ -42,6 +42,8 @@ export interface EntrySyncPayload {
   stress_score?: number | null;
   sleep_hours?: number | null;
   sleep_quality?: number | null;
+  weight_kg?: number | null;
+  body_fat_pct?: number | null;
   session_duration_min?: number | null;
   habit_completed?: boolean | null;
   habit_value?: number | null;
@@ -56,6 +58,19 @@ export interface EntrySyncPayload {
 export interface EntryRead extends EntrySyncPayload {
   created_at: string;
   synced_from_offline: boolean;
+}
+
+export type ExportMetadataRow = Omit<EntryRead, "encrypted_dek" | "encrypted_content">;
+
+export interface TrendPoint {
+  day: string;
+  value: number;
+}
+
+export interface CorrelationPoint {
+  day: string;
+  x: number;
+  y: number;
 }
 
 export type HabitFrequency = "daily" | "weekly";
@@ -151,6 +166,9 @@ export const api = {
       skill_id?: string;
       habit_id?: string;
       entry_type?: string;
+      tag?: string;
+      start_date?: string;
+      end_date?: string;
       limit?: number;
       offset?: number;
     },
@@ -159,10 +177,49 @@ export const api = {
     if (params?.skill_id) q.set("skill_id", params.skill_id);
     if (params?.habit_id) q.set("habit_id", params.habit_id);
     if (params?.entry_type) q.set("entry_type", params.entry_type);
+    if (params?.tag) q.set("tag", params.tag);
+    if (params?.start_date) q.set("start_date", params.start_date);
+    if (params?.end_date) q.set("end_date", params.end_date);
     if (params?.limit != null) q.set("limit", String(params.limit));
     if (params?.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
     return request(`/api/entries${qs ? `?${qs}` : ""}`, { token });
+  },
+
+  async getTrends(
+    token: string,
+    params: { metric: string; period?: "7d" | "30d" | "90d" | "1y" },
+  ): Promise<TrendPoint[]> {
+    const q = new URLSearchParams();
+    q.set("metric", params.metric);
+    if (params.period) q.set("period", params.period);
+    return request(`/api/analytics/trends?${q.toString()}`, { token });
+  },
+
+  async getCorrelations(
+    token: string,
+    params: {
+      x: string;
+      y: string;
+      period?: "7d" | "30d" | "90d" | "1y";
+    },
+  ): Promise<CorrelationPoint[]> {
+    const q = new URLSearchParams();
+    q.set("x", params.x);
+    q.set("y", params.y);
+    if (params.period) q.set("period", params.period);
+    return request(`/api/analytics/correlations?${q.toString()}`, { token });
+  },
+
+  async exportMetadata(
+    token: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<ExportMetadataRow[]> {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request(`/api/export/metadata${qs ? `?${qs}` : ""}`, { token });
   },
 
   async listSkills(token: string): Promise<Skill[]> {

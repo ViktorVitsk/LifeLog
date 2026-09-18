@@ -41,6 +41,8 @@ export async function runSyncOnce(token: string): Promise<SyncResult> {
     stress_score: p.stress_score,
     sleep_hours: p.sleep_hours,
     sleep_quality: p.sleep_quality,
+    weight_kg: p.weight_kg,
+    body_fat_pct: p.body_fat_pct,
     session_duration_min: p.session_duration_min,
     habit_completed: p.habit_completed,
     habit_value: p.habit_value,

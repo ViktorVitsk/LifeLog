@@ -79,6 +79,9 @@ class Entry(Base):
     sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     sleep_quality: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_fat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     session_duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     habit_completed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

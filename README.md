@@ -14,7 +14,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 | 2 — Daily check-in | ✅ done | `/checkin` with dynamic forms, Dexie offline queue, SyncManager, `/dashboard` with mood trend |
 | 3 — Psychology | ✅ done | `/psychology` with gap-model chart, pattern insights, gratitude log, emotional history (lazy decrypt); EMOTIONAL_STATE form in Check-in |
 | 4 — Skills & habits | ✅ done | `/api/skills` + `/api/habits`, `/skills` builder + session chart, `/habits` + heatmap, Check-in **Skill** / **Habit** tabs |
-| 5 — Analytics & polish | — | `/api/analytics/*`, correlations, body metrics, sleep, JSON export |
+| 5 — Analytics & polish | ✅ done | `/api/analytics/trends` + `/correlations`, `/api/export/metadata`, `/analytics`, `/journal`, `/settings` export, Check-in **Sleep** / **Body**, Alembic `0003` (`weight_kg`, `body_fat_pct`) |
 
 ### Phase 2 details
 
@@ -22,7 +22,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 - **Auth**: `AuthContext` mirrors `{ token, username, salt }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password so the KEK can be re-derived locally (no network round-trip). Wrong-password attempts are caught by unwrapping an existing entry's DEK.
 - **Offline queue**: Dexie IndexedDB table `entries` with `status: pending | synced | error`. Every submission is encrypted client-side, enqueued optimistically, and displayed instantly on the dashboard.
 - **SyncManager** (single global instance via `SyncContext`): pushes pending rows every 30 s, on `online`, on `visibilitychange`, and on explicit `trigger()` after a form submit. Idempotent on the server (`ON CONFLICT DO NOTHING`). Network failures are caught as `NetworkError`, marked silently as "offline", and retried on the next tick; only genuine 4xx/5xx rejections flip a row into the `error` state.
-- **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit / sleep / meal forms come in later phases.
+- **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit arrive in Phases 3–4; sleep / body metrics in Phase 5.
 - **Dashboard**: today widgets (mood / energy / anxiety averages + entry type counts) and a 30-day line chart for mood/energy/anxiety. **All aggregation uses open numeric fields only — no content is decrypted on the dashboard.**
 - **Recent entries feed**: metadata-only (timestamp, type, open scores, tags, sync source).
 
@@ -47,6 +47,15 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 - **Dexie** schema bumped to **v2** — adds compound indexes `skill_id` / `habit_id` on the offline queue for faster filtered reads.
 - **`useEntries`**: server fetch uses `limit=1000` so skill/habit charts have enough history without a second round-trip.
 - **Alembic `0002`**: adds nullable `focus_score`, `social_battery_score`, `stress_score` on `entries` so daily check-in sliders can appear in the dashboard feed as **open** metrics (run `alembic upgrade head` after pull).
+
+### Phase 5 details
+
+- **Backend**: `GET /api/analytics/trends` (open metric + `7d`/`30d`/`90d`/`1y`), `GET /api/analytics/correlations` (two metrics joined by UTC calendar day), `GET /api/export/metadata` (paginated rows without ciphertext). The TypeScript client forwards `tag`, `start_date`, and `end_date` on `api.listEntries` when provided.
+- **Alembic `0003`**: nullable `weight_kg`, `body_fat_pct` on `entries` for body-metric trends without decrypting encrypted JSON.
+- **Check-in**: **Sleep** tab (`SLEEP`) — `sleep_hours` / `sleep_quality` open; bedtime / wake / dream notes encrypted. **Body** tab (`BODY_METRICS`) — weight and body fat % open; waist, resting HR, notes encrypted.
+- **`/analytics`**: period chips, trend line chart (server series), scatter plot for preset cross-metric pairs.
+- **`/journal`**: client-side tag substring filter over merged entries for `THOUGHT` / `GRATITUDE` / `EMOTIONAL_STATE`; per-row decrypt preview (requires KEK).
+- **`/settings`**: download open-field metadata JSON from the API; download merged **full** JSON with plaintext decrypted in the browser (never uploaded).
 
 ---
 
@@ -134,6 +143,16 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
 
 ---
 
+## Phase 5 acceptance (DoD)
+
+1. **Swagger** (`/docs`): `GET /api/analytics/trends`, `GET /api/analytics/correlations`, `GET /api/export/metadata` appear and require auth.
+2. **`/checkin`**: **Sleep** and **Body** tabs save without errors; after sync, Postgres shows `sleep_hours` / `sleep_quality` and optional `weight_kg` / `body_fat_pct` as plain numbers where applicable, with ciphertext unchanged for sensitive fields.
+3. **`/analytics`**: With at least a few days of daily + sleep data, the trend chart and correlation scatter show points (or empty states without crashing).
+4. **`/journal`**: Tag filter narrows the list; **Decrypt** opens modal content when the KEK is present.
+5. **`/settings`**: Metadata download produces JSON without `encrypted_*` keys; full export includes decrypted `plaintext` objects for rows your KEK can open.
+
+---
+
 ## Project layout
 
 ```
@@ -147,13 +166,16 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
 │   ├── alembic.ini
 │   ├── alembic/
 │   │   ├── env.py
-│   │   └── versions/0001_initial_schema.py
+│   │   └── versions/
+│   │       ├── 0001_initial_schema.py
+│   │       ├── 0002_daily_checkin_open_scores.py
+│   │       └── 0003_body_open_metrics.py
 │   └── app/
 │       ├── main.py
 │       ├── core/              # config, database, security (JWT, bcrypt, PBKDF2 salt)
 │       ├── models/            # SQLAlchemy (User, Skill, Habit, ContextTag, Entry)
 │       ├── schemas/           # Pydantic (auth, entry, skill, habit)
-│       ├── api/               # auth, entries, skills, habits, deps
+│       ├── api/               # auth, entries, skills, habits, analytics, export, deps
 │       └── enums.py
 └── frontend/
     ├── Dockerfile
@@ -173,7 +195,7 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
         │   └── syncManager.ts               # Interval + online/visibility-driven push loop
         ├── lib/
         │   ├── crypto.ts                    # Web Crypto API: KEK / DEK / encrypt / decrypt
-        │   ├── api.ts                       # + skills / habits CRUD, filtered listEntries
+        │   ├── api.ts                       # + skills / habits, analytics, export, listEntries filters
         │   ├── metricSchema.ts              # Skill metric_schema types + parseMetricSchema
         │   └── entrySubmit.ts               # encrypt + enqueue helper
         ├── hooks/
@@ -185,9 +207,12 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
         │   ├── DashboardPage.tsx
         │   ├── PsychologyPage.tsx           # Gap chart + insights + gratitude + history
         │   ├── SkillsPage.tsx               # Skill builder + session chart
-        │   └── HabitsPage.tsx               # Habit CRUD + heatmap
+        │   ├── HabitsPage.tsx               # Habit CRUD + heatmap
+        │   ├── AnalyticsPage.tsx            # Trends + correlations (Recharts)
+        │   ├── JournalPage.tsx              # Tag filter + decrypt preview
+        │   └── SettingsPage.tsx             # Metadata + full JSON export
         └── components/
-            ├── Layout.tsx                   # Nav + SyncBadge (online/offline-aware) + Outlet
+            ├── Layout.tsx                   # Nav (incl. Analytics / Journal / Settings) + SyncBadge + Outlet
             ├── ProtectedRoute.tsx           # Shows UnlockOverlay when KEK is missing
             ├── UnlockOverlay.tsx            # Re-derive KEK after refresh
             ├── ui/Slider.tsx
@@ -197,7 +222,9 @@ docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_typ
             │   ├── ThoughtForm.tsx
             │   ├── GratitudeForm.tsx
             │   ├── SkillSessionForm.tsx       # SKILL_SESSION + dynamic metrics
-            │   └── HabitLogForm.tsx           # HABIT_LOG
+            │   ├── HabitLogForm.tsx           # HABIT_LOG
+            │   ├── SleepForm.tsx              # SLEEP
+            │   └── BodyMetricsForm.tsx        # BODY_METRICS
             ├── dashboard/
             │   ├── TodayWidgets.tsx
             │   ├── MoodTrendChart.tsx       # Recharts LineChart (30 days, daily avg)

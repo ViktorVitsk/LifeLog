@@ -28,6 +28,8 @@ class EntryBase(BaseModel):
     stress_score: int | None = Field(default=None, ge=1, le=10)
     sleep_hours: float | None = Field(default=None, ge=0, le=24)
     sleep_quality: int | None = Field(default=None, ge=1, le=10)
+    weight_kg: float | None = Field(default=None, ge=0, le=500)
+    body_fat_pct: float | None = Field(default=None, ge=0, le=100)
     session_duration_min: int | None = Field(default=None, ge=0)
     habit_completed: bool | None = None
     habit_value: float | None = None

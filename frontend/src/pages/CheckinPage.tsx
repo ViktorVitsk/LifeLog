@@ -1,9 +1,11 @@
 import { useState } from "react";
+import BodyMetricsForm from "../components/checkin/BodyMetricsForm";
 import DailyCheckinForm from "../components/checkin/DailyCheckinForm";
 import EmotionalStateForm from "../components/checkin/EmotionalStateForm";
 import GratitudeForm from "../components/checkin/GratitudeForm";
 import HabitLogForm from "../components/checkin/HabitLogForm";
 import SkillSessionForm from "../components/checkin/SkillSessionForm";
+import SleepForm from "../components/checkin/SleepForm";
 import ThoughtForm from "../components/checkin/ThoughtForm";
 import { useSync } from "../context/SyncContext";
 
@@ -12,6 +14,8 @@ type EntryType =
   | "EMOTIONAL_STATE"
   | "SKILL_SESSION"
   | "HABIT_LOG"
+  | "SLEEP"
+  | "BODY_METRICS"
   | "THOUGHT"
   | "GRATITUDE";
 
@@ -20,6 +24,8 @@ const TABS: { id: EntryType; label: string; hint: string }[] = [
   { id: "EMOTIONAL_STATE", label: "Emotion", hint: "Gap-model work on a specific feeling" },
   { id: "SKILL_SESSION", label: "Skill", hint: "Practice session (uses skill metric schema)" },
   { id: "HABIT_LOG", label: "Habit", hint: "Mark a habit done (or log a value)" },
+  { id: "SLEEP", label: "Sleep", hint: "Hours + quality (open); times & dreams encrypted" },
+  { id: "BODY_METRICS", label: "Body", hint: "Weight / fat % open; other measures encrypted" },
   { id: "THOUGHT", label: "Thought", hint: "A free-form journal entry" },
   { id: "GRATITUDE", label: "Gratitude", hint: "Three specific things" },
 ];
@@ -44,7 +50,7 @@ export default function CheckinPage() {
         <p className="text-sm text-zinc-400 mt-1">{activeTab.hint}</p>
       </div>
 
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 rounded border border-zinc-800 p-0.5 text-xs sm:text-sm">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-1 rounded border border-zinc-800 p-0.5 text-xs sm:text-sm">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -63,6 +69,8 @@ export default function CheckinPage() {
         {active === "EMOTIONAL_STATE" && <EmotionalStateForm onSubmitted={onSubmitted} />}
         {active === "SKILL_SESSION" && <SkillSessionForm onSubmitted={onSubmitted} />}
         {active === "HABIT_LOG" && <HabitLogForm onSubmitted={onSubmitted} />}
+        {active === "SLEEP" && <SleepForm onSubmitted={onSubmitted} />}
+        {active === "BODY_METRICS" && <BodyMetricsForm onSubmitted={onSubmitted} />}
         {active === "THOUGHT" && <ThoughtForm onSubmitted={onSubmitted} />}
         {active === "GRATITUDE" && <GratitudeForm onSubmitted={onSubmitted} />}
       </div>

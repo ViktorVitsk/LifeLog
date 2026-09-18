@@ -52,6 +52,8 @@ async def sync_entries(
             "stress_score": e.stress_score,
             "sleep_hours": e.sleep_hours,
             "sleep_quality": e.sleep_quality,
+            "weight_kg": e.weight_kg,
+            "body_fat_pct": e.body_fat_pct,
             "session_duration_min": e.session_duration_min,
             "habit_completed": e.habit_completed,
             "habit_value": e.habit_value,

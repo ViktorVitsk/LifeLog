@@ -3,8 +3,10 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.entries import router as entries_router
+from app.api.export import router as export_router
 from app.api.habits import router as habits_router
 from app.api.skills import router as skills_router
 from app.core.config import get_settings
@@ -35,6 +37,8 @@ app.include_router(auth_router)
 app.include_router(entries_router)
 app.include_router(skills_router)
 app.include_router(habits_router)
+app.include_router(analytics_router)
+app.include_router(export_router)
 
 
 @app.get("/health", tags=["meta"])

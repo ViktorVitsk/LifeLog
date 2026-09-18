@@ -7,8 +7,11 @@ import { isNetworkError } from "./lib/api";
 import CheckinPage from "./pages/CheckinPage";
 import DashboardPage from "./pages/DashboardPage";
 import LoginPage from "./pages/LoginPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 import HabitsPage from "./pages/HabitsPage";
+import JournalPage from "./pages/JournalPage";
 import PsychologyPage from "./pages/PsychologyPage";
+import SettingsPage from "./pages/SettingsPage";
 import SkillsPage from "./pages/SkillsPage";
 
 const queryClient = new QueryClient({
@@ -47,6 +50,9 @@ export default function App() {
               <Route path="/psychology" element={<PsychologyPage />} />
               <Route path="/skills" element={<SkillsPage />} />
               <Route path="/habits" element={<HabitsPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/journal" element={<JournalPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/checkin" replace />} />
           </Routes>

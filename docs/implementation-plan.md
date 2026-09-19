@@ -83,7 +83,6 @@
 - Первый browser full export содержал одну diary page; multi-page merge покрыт unit, но не отдельным большим UI dataset.
 - Готовый 14-дневный набор для weekly review не засевался в UI; вычисления и flags покрыты авто-тестами.
 - E2E cleanup tombstone-ит созданные entities, но API удаления user отсутствует: после тестов остаются пустые synthetic users.
-- Финальный полный прогон Iteration I Wave 1 после 1.7 пока не выполнялся.
 
 ## Changelog
 
@@ -104,4 +103,5 @@
 - **1.4 checked (test run):** unit tests используют `fake-indexeddb` и production Dexie paths — 139/139 passed, skip 0.
 - **1.5 checked (test run):** Playwright CT для AuthContext session races — 2/2 passed.
 - **1.6 checked (test run):** Playwright E2E account/sync race scenarios — 5/5 passed.
-- **1.7 docs:** подробный документ перенесён в архив без потери текста; основной план сокращён. Финальный полный прогон Wave 1 не заявлен и не выполнялся.
+- **1.7 checked (docs):** подробный документ перенесён в архив без потери текста; основной план сокращён.
+- **Wave 1 final matrix checked:** `tsc` passed; frontend unit 139/139, component 2/2; Ruff passed; backend unit 35 passed + 5 live skipped; live mode 40/40; Playwright E2E 5/5.

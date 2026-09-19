@@ -73,6 +73,23 @@ def test_live_goal_memory_action_cycle():
         )
         assert created.json()["results"][0]["status"] == "created"
 
+        second_goal_id = str(uuid.uuid4())
+        second_goal = client.post(
+            f"{BASE}/api/life/goals/sync",
+            headers=headers,
+            json={
+                "items": [
+                    {
+                        "id": second_goal_id,
+                        "state": "active",
+                        "encrypted_dek": "dek",
+                        "encrypted_content": "goal-ct-2",
+                    }
+                ]
+            },
+        )
+        assert second_goal.json()["results"][0]["status"] == "created"
+
         memory_id = str(uuid.uuid4())
         mem = client.post(
             f"{BASE}/api/life/memory/sync",
@@ -213,3 +230,21 @@ def test_live_goal_memory_action_cycle():
         assert body["feedback"][0]["outcome_kind"] == "tried_no_effect"
         other_view = client.get(f"{BASE}/api/life", headers=other)
         assert other_view.json()["goals"] == []
+
+        first_page = client.get(
+            f"{BASE}/api/life",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+        assert first_page.status_code == 200
+        assert len(first_page.json()["goals"]) == 1
+        assert first_page.json()["next_offset"] == 1
+
+        second_page = client.get(
+            f"{BASE}/api/life",
+            headers=headers,
+            params={"limit": 1, "offset": 1},
+        )
+        assert second_page.status_code == 200
+        assert len(second_page.json()["goals"]) == 1
+        assert second_page.json()["next_offset"] is None

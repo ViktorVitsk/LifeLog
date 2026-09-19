@@ -25,10 +25,14 @@ uv.lock
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/tsconfig.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Stray pytest temporary cache directories
+backend/pytest-cache-files-*/
 
 # Editors
 .idea/

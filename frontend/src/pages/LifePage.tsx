@@ -11,8 +11,8 @@ import { useEntries } from "../hooks/useEntries";
 import { useMergedLife } from "../hooks/useMergedLife";
 import type { LifeActionRead, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
-import { resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
-import { ActionChangedError, commitFeedbackCorrection, commitFeedbackDecision, listLifeOps, resumeFeedbackOps } from "../lib/lifeOp";
+import { readLifeRow, resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
+import { ActionChangedError, FeedbackChangedError, SubmissionReusedError, commitFeedbackCorrection, commitFeedbackDecision, listLifeOps, resumeFeedbackOps } from "../lib/lifeOp";
 import { actionPatchForDecision, USER_OUTCOMES, ACTION_DECISIONS, outcomeSourceOf, type ActionDecision, type UserOutcome } from "../lib/feedbackOutcome";
 import { queueSyncLabel } from "../lib/mergeLife";
 import type { SaveScope } from "../lib/accountScope";
@@ -315,6 +315,7 @@ export default function LifePage() {
     try {
       if (existing) {
         const plain = feedbackPlain[existing.id] ?? {};
+        const localRow = await readLifeRow(existing.id);
         await commitFeedbackCorrection({
           kek,
           action,
@@ -323,6 +324,8 @@ export default function LifePage() {
           submissionId,
           existingFeedback: existing,
           existingPlain: plain,
+          expectedFeedbackVersion: existing.version,
+          expectedFeedbackLocalRev: localRow?.local_rev ?? 0,
           planSnapshot: typeof plain.plan_snapshot === "string" ? String(plain.plan_snapshot) : null,
         });
       } else {
@@ -351,6 +354,8 @@ export default function LifePage() {
       return true;
     } catch (e) {
       if (e instanceof ActionChangedError) setMsg(t.lifeActionRemoteChanged);
+      else if (e instanceof FeedbackChangedError) setMsg(t.lifeFeedbackRemoteChanged);
+      else if (e instanceof SubmissionReusedError) setMsg(t.lifeSubmissionReused);
       else if ((e as Error).message === "outcome_required") setMsg(t.lifeNeedOutcome);
       else if ((e as Error).message === "decision_required") setMsg(t.lifeNeedDecision);
       else setMsg((e as Error).message);

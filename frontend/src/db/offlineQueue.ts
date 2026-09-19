@@ -104,6 +104,7 @@ export interface LifeOp {
   feedback_payload?: Record<string, unknown> | null;
   action_payload?: Record<string, unknown> | null;
   created_at: number;
+  status_seq?: number;
 }
 
 export class LifeLogDB extends Dexie {
@@ -196,7 +197,14 @@ export function stripDoneOpPayloads(op: LifeOp): LifeOp {
 }
 
 export function finalizeLifeOpStatus(op: LifeOp): LifeOp {
-  if (op.status === "superseded" || op.status === "action_conflict") return op;
+  if (op.status === "superseded") return op;
+  if (op.status === "done") return stripDoneOpPayloads(op);
+  if (op.status === "action_conflict") {
+    if (op.feedback_acked && (op.action_local_rev == null || op.action_acked)) {
+      return stripDoneOpPayloads({ ...op, status: "done" });
+    }
+    return op;
+  }
   let status: LifeOpStatus = "local";
   if (op.feedback_acked && (op.action_local_rev == null || op.action_acked)) status = "done";
   else if (op.feedback_acked) status = "feedback_acked";
@@ -222,7 +230,17 @@ export function applyOpEntityAck(
     if (ok) next.action_acked = true;
     else if (bad) next.status = "action_conflict";
   }
-  return finalizeLifeOpStatus(next);
+  const finalized = finalizeLifeOpStatus(next);
+  if (
+    finalized.status === op.status &&
+    finalized.feedback_acked === op.feedback_acked &&
+    finalized.action_acked === op.action_acked &&
+    finalized.feedback_payload === op.feedback_payload &&
+    finalized.action_payload === op.action_payload
+  ) {
+    return op;
+  }
+  return { ...finalized, status_seq: (op.status_seq ?? 0) + 1 };
 }
 
 export async function ackLifeOpsForResult(
@@ -677,6 +695,7 @@ export async function persistServerEntries(items: EntryRead[], owner: string, st
 export async function applyEntryTombstones(
   items: { id: string; version?: number }[],
   owner: string,
+  store?: LifeLogDB,
 ): Promise<void> {
   if (items.length === 0) return;
   const droppable = (row: PendingEntry | undefined, tombVersion?: number) => {
@@ -685,7 +704,7 @@ export async function applyEntryTombstones(
     if (typeof tombVersion === "number" && typeof row.version === "number" && tombVersion < row.version) return false;
     return row.status === "synced" || row.status === "pending_delete";
   };
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   if (test) {
     for (const item of items) {
       const row = test.entries.get(item.id);
@@ -693,11 +712,11 @@ export async function applyEntryTombstones(
     }
     return;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
+  if (!db) return;
+  await db.transaction("rw", db.entries, async () => {
     for (const item of items) {
-      const row = await store.entries.get(item.id);
-      if (droppable(row, item.version)) await store.entries.delete(item.id);
+      const row = await db.entries.get(item.id);
+      if (droppable(row, item.version)) await db.entries.delete(item.id);
     }
   });
 }

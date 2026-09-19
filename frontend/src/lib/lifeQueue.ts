@@ -239,6 +239,7 @@ export function lifeSyncPayload(row: PendingLife): Record<string, unknown> {
 export async function applyLifeTombstones(
   items: { id: string; version?: number }[],
   owner: string,
+  store?: LifeLogDB,
 ): Promise<void> {
   if (items.length === 0) return;
   const droppable = (row: PendingLife | undefined, tombVersion?: number) => {
@@ -247,7 +248,7 @@ export async function applyLifeTombstones(
     if (isStaleVersion(tombVersion, row.server_version)) return false;
     return row.status === "synced" || row.status === "pending_delete";
   };
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   if (test) {
     for (const item of items) {
       const row = test.life.get(item.id);
@@ -255,10 +256,11 @@ export async function applyLifeTombstones(
     }
     return;
   }
-  await getLifeDb().transaction("rw", getLifeDb().life_queue, async () => {
+  if (!db) return;
+  await db.transaction("rw", db.life_queue, async () => {
     for (const item of items) {
-      const row = await getLifeDb().life_queue.get(item.id);
-      if (droppable(row, item.version)) await getLifeDb().life_queue.delete(item.id);
+      const row = await db.life_queue.get(item.id);
+      if (droppable(row, item.version)) await db.life_queue.delete(item.id);
     }
   });
 }

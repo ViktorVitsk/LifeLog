@@ -27,6 +27,20 @@ export class ActionChangedError extends Error {
   }
 }
 
+export class FeedbackChangedError extends Error {
+  constructor() {
+    super("feedback_changed");
+    this.name = "FeedbackChangedError";
+  }
+}
+
+export class SubmissionReusedError extends Error {
+  constructor() {
+    super("submission_id_already_used");
+    this.name = "SubmissionReusedError";
+  }
+}
+
 export function opDeliveryLabel(op: LifeOp, feedback?: PendingLife, action?: PendingLife): "on_device" | "partial" | "synced" {
   if (op.status === "done") return "synced";
   if (op.status === "feedback_acked" || op.status === "action_acked" || op.status === "action_conflict") return "partial";
@@ -73,6 +87,12 @@ export async function putLifeOp(op: LifeOp, store?: LifeLogDB): Promise<void> {
   if (db) await db.life_ops.put(op);
 }
 
+async function readOp(id: string, store?: LifeLogDB): Promise<LifeOp | undefined> {
+  const { test, db } = resolveQueueAccess(store);
+  if (test) return test.ops.get(id);
+  return db?.life_ops.get(id);
+}
+
 function actionLooksNewer(existing: PendingLife | undefined, expectedVersion: number | null | undefined, expectedLocalRev?: number | null): boolean {
   if (!existing) return false;
   if (existing.status === "conflict") return true;
@@ -80,6 +100,67 @@ function actionLooksNewer(existing: PendingLife | undefined, expectedVersion: nu
   if (typeof server === "number" && expectedVersion != null && server > expectedVersion) return true;
   if (expectedLocalRev != null && (existing.local_rev ?? 0) > expectedLocalRev) return true;
   return false;
+}
+
+function feedbackLooksNewer(
+  existing: PendingLife,
+  expectedVersion: number | null | undefined,
+  expectedLocalRev?: number | null,
+): boolean {
+  if (existing.status === "conflict") return true;
+  const server = existing.server_version ?? (typeof existing.payload.version === "number" ? existing.payload.version : undefined);
+  if (typeof server === "number" && expectedVersion != null && server > expectedVersion) return true;
+  if (expectedLocalRev != null && (existing.local_rev ?? 0) > expectedLocalRev) return true;
+  return false;
+}
+
+function assertFeedbackSnapshot(
+  current: PendingLife | undefined,
+  expected: { owner: string; actionId: string; expectedVersion: number | null; expectedLocalRev: number | null },
+): PendingLife {
+  if (!current || current.status === "pending_delete" || current.payload.deleted) {
+    throw new FeedbackChangedError();
+  }
+  if (current.owner_user_id !== expected.owner) throw new FeedbackChangedError();
+  const actionId = current.payload.action_id;
+  if (actionId && String(actionId) !== expected.actionId) throw new FeedbackChangedError();
+  if (feedbackLooksNewer(current, expected.expectedVersion, expected.expectedLocalRev)) {
+    throw new FeedbackChangedError();
+  }
+  return current;
+}
+
+function entityMatchesOp(
+  row: PendingLife | undefined,
+  expectedRev: number | null | undefined,
+  opPayload: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!row || expectedRev == null || row.local_rev !== expectedRev) return false;
+  const opCipher = cipherOf(opPayload);
+  if (opCipher) {
+    const rowCipher = cipherOf(row.payload);
+    if (rowCipher && rowCipher !== opCipher) return false;
+  }
+  return true;
+}
+
+export function recoverLegacyOpRevs(op: LifeOp, feedback?: PendingLife, action?: PendingLife): LifeOp {
+  const next = { ...op };
+  if (next.feedback_local_rev == null && feedback) {
+    const opCipher = cipherOf(op.feedback_payload);
+    const rowCipher = cipherOf(feedback.payload);
+    if (opCipher && rowCipher && opCipher === rowCipher) {
+      next.feedback_local_rev = feedback.local_rev ?? 1;
+    }
+  }
+  if (next.kind === "feedback_and_action" && next.action_local_rev == null && action) {
+    const opCipher = cipherOf(op.action_payload);
+    const rowCipher = cipherOf(action.payload);
+    if (opCipher && rowCipher && opCipher === rowCipher) {
+      next.action_local_rev = action.local_rev ?? 1;
+    }
+  }
+  return next;
 }
 
 function cipherOf(payload: Record<string, unknown> | null | undefined): string {
@@ -144,28 +225,67 @@ async function writeRows(op: LifeOp, feedback: PendingLife, action: PendingLife 
 }
 
 export async function refreshLifeOpStatus(owner: string, store?: LifeLogDB): Promise<void> {
-  for (const op of await listOpenLifeOps(owner, store)) {
+  for (const listed of await listOpenLifeOps(owner, store)) {
+    const op = await readOp(listed.id, store);
+    if (!op || op.status === "done" || op.status === "superseded") continue;
+    if ((op.status_seq ?? 0) !== (listed.status_seq ?? 0)) continue;
+
     const feedback = await readLifeRow(op.feedback_id, store);
-    const action = op.action_local_rev != null ? await readLifeRow(op.action_id, store) : undefined;
-    let next = { ...op };
-    if (
-      (feedback?.status === "conflict" && feedback.local_rev === op.feedback_local_rev) ||
-      (action?.status === "conflict" && action.local_rev === op.action_local_rev)
-    ) {
-      next.status = "action_conflict";
+    const action = op.kind === "feedback_and_action" ? await readLifeRow(op.action_id, store) : undefined;
+    let next = recoverLegacyOpRevs(op, feedback, action);
+    const fbConflict =
+      feedback?.status === "conflict" &&
+      next.feedback_local_rev != null &&
+      feedback.local_rev === next.feedback_local_rev;
+    const actConflict =
+      action?.status === "conflict" &&
+      next.action_local_rev != null &&
+      action.local_rev === next.action_local_rev;
+
+    if (fbConflict || actConflict) {
+      next = { ...next, status: "action_conflict" };
     } else {
-      if (feedback?.status === "synced" && feedback.local_rev === op.feedback_local_rev) next.feedback_acked = true;
-      if (action?.status === "synced" && action.local_rev === op.action_local_rev) next.action_acked = true;
+      if (next.status === "action_conflict") {
+        if (action && action.status !== "conflict" && (action.local_rev ?? 0) > (next.action_local_rev ?? 0)) {
+          next = {
+            ...next,
+            action_local_rev: action.local_rev,
+            action_acked: action.status === "synced" && entityMatchesOp(action, action.local_rev, next.action_payload),
+          };
+        }
+        if (feedback && feedback.status !== "conflict" && (feedback.local_rev ?? 0) > (next.feedback_local_rev ?? 0)) {
+          next = {
+            ...next,
+            feedback_local_rev: feedback.local_rev,
+            feedback_acked: feedback.status === "synced" && entityMatchesOp(feedback, feedback.local_rev, next.feedback_payload),
+          };
+        }
+      }
+      next = { ...next, status: next.status === "action_conflict" ? "local" : next.status };
+      if (feedback?.status === "synced" && entityMatchesOp(feedback, next.feedback_local_rev, next.feedback_payload)) {
+        next.feedback_acked = true;
+      }
+      if (action?.status === "synced" && entityMatchesOp(action, next.action_local_rev, next.action_payload)) {
+        next.action_acked = true;
+      }
       next = finalizeLifeOpStatus(next);
     }
+
+    const latest = await readOp(op.id, store);
+    if (!latest || latest.status === "done" || latest.status === "superseded") continue;
+    if ((latest.status_seq ?? 0) !== (op.status_seq ?? 0)) continue;
     if (
-      next.status !== op.status ||
-      next.feedback_acked !== op.feedback_acked ||
-      next.action_acked !== op.action_acked ||
-      next.feedback_payload !== op.feedback_payload
+      next.status === latest.status &&
+      next.feedback_acked === latest.feedback_acked &&
+      next.action_acked === latest.action_acked &&
+      next.feedback_payload === latest.feedback_payload &&
+      next.action_payload === latest.action_payload &&
+      next.feedback_local_rev === latest.feedback_local_rev &&
+      next.action_local_rev === latest.action_local_rev
     ) {
-      await putLifeOp(stripDoneOpPayloads(next), store);
+      continue;
     }
+    await putLifeOp(stripDoneOpPayloads({ ...next, status_seq: (latest.status_seq ?? 0) + 1 }), store);
   }
 }
 
@@ -179,17 +299,21 @@ interface CommitCommon {
   afterEncrypt?: () => Promise<void>;
   afterLocal?: () => Promise<void>;
   store?: LifeLogDB;
+  expectedFeedbackVersion?: number | null;
+  expectedFeedbackLocalRev?: number | null;
 }
 
 async function prepareFeedbackCipher(
   args: CommitCommon & { outcome: UserOutcome; decision: ActionDecision; existingOp?: LifeOp; createdAt?: string; recordedAt?: string; actionVersion?: number | null; correctedAt?: string },
 ): Promise<{ payload: Record<string, unknown>; reusedCipher: boolean; hadExisting: boolean }> {
+  const lockToExisting = Boolean(args.existingOp?.id && args.existingOp.submission_id);
   const hadExisting = Boolean(args.existingOp?.feedback_payload && cipherOf(args.existingOp.feedback_payload));
   if (hadExisting) {
     const plain = await decryptPayload(args.kek, args.existingOp?.feedback_payload);
     if (plain && sameFeedbackIntent(plain, args)) {
       return { payload: args.existingOp!.feedback_payload!, reusedCipher: true, hadExisting };
     }
+    if (lockToExisting) throw new SubmissionReusedError();
   }
   const recordedAt = args.recordedAt ?? new Date().toISOString();
   const createdAt = args.createdAt ?? recordedAt;
@@ -237,7 +361,9 @@ export async function commitFeedbackDecision(args: CommitCommon & {
   const currentBefore = await readLifeRow(args.action.id, args.store);
   const expectedLocalRev = currentBefore?.local_rev ?? 0;
   const existingOp = await findOpBySubmission(scope.owner, submissionId, args.store);
-  const existingOpen = existingOp && existingOp.status !== "done" ? existingOp : undefined;
+  if (existingOp?.status === "done") {
+    return { op: existingOp, reusedCipher: true };
+  }
 
   let actionExtra: { encrypted_dek?: string; encrypted_content?: string } | undefined;
   const prepared = await prepareFeedbackCipher({
@@ -245,7 +371,7 @@ export async function commitFeedbackDecision(args: CommitCommon & {
     outcome,
     decision,
     scope,
-    existingOp: existingOpen,
+    existingOp,
     planSnapshot: args.planSnapshot ?? (args.fields.plan_text?.trim() || null),
   });
   if (decision === "change_plan" && args.fields.plan_text?.trim() && !prepared.reusedCipher) {
@@ -256,15 +382,21 @@ export async function commitFeedbackDecision(args: CommitCommon & {
 
   const result = await runWriteTx(args.store, async () => {
     const inTx = await findOpBySubmission(scope.owner, submissionId, args.store);
-    if (inTx && inTx.status !== "done" && (!prepared.hadExisting || prepared.reusedCipher)) {
+    if (inTx?.status === "done") {
       return { op: inTx, reusedCipher: true };
+    }
+    if (inTx && inTx.status !== "superseded") {
+      if (!prepared.hadExisting || prepared.reusedCipher) {
+        return { op: inTx, reusedCipher: true };
+      }
+      throw new SubmissionReusedError();
     }
     const currentAction = await readActionInTx(args.action.id, args.store);
     if (currentAction && currentAction.owner_user_id !== scope.owner) throw new ActionChangedError();
     if (actionLooksNewer(currentAction, expectedVersion, expectedLocalRev)) throw new ActionChangedError();
 
     const feedbackId = String(prepared.payload.id);
-    const opId = inTx?.id ?? existingOpen?.id ?? crypto.randomUUID();
+    const opId = inTx?.id ?? existingOp?.id ?? crypto.randomUUID();
     const actionPayload = {
       id: args.action.id,
       goal_id: args.action.goal_id,
@@ -281,8 +413,13 @@ export async function commitFeedbackDecision(args: CommitCommon & {
     const feedbackRow = nextLifeEnqueue(await readLifeRow(feedbackId, args.store), "feedback", prepared.payload, scope.owner);
     const actionRow = nextLifeEnqueue(await readLifeRow(args.action.id, args.store), "action", actionPayload, scope.owner);
     for (const other of await listOpenLifeOps(scope.owner, args.store)) {
-      if (other.action_id === args.action.id && other.submission_id !== submissionId && other.id !== opId) {
-        await putLifeOp({ ...other, status: "superseded" }, args.store);
+      if (
+        other.kind === "feedback_and_action" &&
+        other.action_id === args.action.id &&
+        other.submission_id !== submissionId &&
+        other.id !== opId
+      ) {
+        await putLifeOp({ ...other, status: "superseded", status_seq: (other.status_seq ?? 0) + 1 }, args.store);
       }
     }
     const op: LifeOp = {
@@ -302,7 +439,8 @@ export async function commitFeedbackDecision(args: CommitCommon & {
       action_acked: false,
       feedback_payload: prepared.payload,
       action_payload: actionPayload,
-      created_at: inTx?.created_at ?? existingOpen?.created_at ?? Date.now(),
+      created_at: inTx?.created_at ?? existingOp?.created_at ?? Date.now(),
+      status_seq: (inTx?.status_seq ?? existingOp?.status_seq ?? 0) + 1,
     };
     await writeRows(op, feedbackRow, actionRow, args.store);
     return { op, reusedCipher: prepared.reusedCipher };
@@ -319,8 +457,16 @@ export async function commitFeedbackCorrection(args: CommitCommon & {
   const outcome = assertOutcome(args.outcome);
   const scope = args.scope ?? captureSaveScope();
   const submissionId = args.submissionId;
+  if (args.existingFeedback.action_id && args.existingFeedback.action_id !== args.action.id) {
+    throw new FeedbackChangedError();
+  }
   const existingOp = await findOpBySubmission(scope.owner, submissionId, args.store);
-  const existingOpen = existingOp && existingOp.status !== "done" ? existingOp : undefined;
+  if (existingOp?.status === "done") {
+    return { op: existingOp, reusedCipher: true };
+  }
+  const expectedFeedbackVersion = args.expectedFeedbackVersion ?? args.existingFeedback.version ?? null;
+  const currentFbBefore = await readLifeRow(args.existingFeedback.id, args.store);
+  const expectedFeedbackLocalRev = args.expectedFeedbackLocalRev ?? currentFbBefore?.local_rev ?? 0;
   const existingPlain = args.existingPlain ?? (await decryptPayload(args.kek, {
     encrypted_content: args.existingFeedback.encrypted_content,
     encrypted_dek: args.existingFeedback.encrypted_dek,
@@ -336,22 +482,7 @@ export async function commitFeedbackCorrection(args: CommitCommon & {
     outcome,
     decision,
     scope,
-    existingOp: existingOpen ?? {
-      id: existingOp?.id ?? "",
-      owner_user_id: scope.owner,
-      session_id: scope.sessionId,
-      kind: "feedback_correction",
-      status: "local",
-      submission_id: submissionId,
-      feedback_id: args.existingFeedback.id,
-      action_id: args.action.id,
-      feedback_payload: {
-        id: args.existingFeedback.id,
-        encrypted_content: args.existingFeedback.encrypted_content,
-        encrypted_dek: args.existingFeedback.encrypted_dek,
-      },
-      created_at: Date.now(),
-    },
+    existingOp: existingOp && existingOp.status !== "done" ? existingOp : undefined,
     createdAt: typeof existingPlain?.created_at === "string" ? existingPlain.created_at : args.existingFeedback.created_at,
     recordedAt: typeof existingPlain?.recorded_at === "string" ? existingPlain.recorded_at : undefined,
     actionVersion:
@@ -363,19 +494,31 @@ export async function commitFeedbackCorrection(args: CommitCommon & {
     correctedAt: new Date().toISOString(),
   });
   prepared.payload.id = args.existingFeedback.id;
-  prepared.payload.version = args.existingFeedback.version;
+  prepared.payload.version = expectedFeedbackVersion ?? args.existingFeedback.version;
   if (args.afterEncrypt) await args.afterEncrypt();
 
   const result = await runWriteTx(args.store, async () => {
     const inTx = await findOpBySubmission(scope.owner, submissionId, args.store);
-    if (inTx && inTx.status !== "done" && (!prepared.hadExisting || prepared.reusedCipher)) {
+    if (inTx?.status === "done") {
       return { op: inTx, reusedCipher: true };
+    }
+    if (inTx && inTx.status !== "superseded") {
+      if (!prepared.hadExisting || prepared.reusedCipher) {
+        return { op: inTx, reusedCipher: true };
+      }
+      throw new SubmissionReusedError();
     }
     const currentAction = await readActionInTx(args.action.id, args.store);
     if (currentAction && currentAction.owner_user_id !== scope.owner) throw new ActionChangedError();
     const feedbackId = args.existingFeedback.id;
-    const opId = inTx?.id ?? existingOpen?.id ?? crypto.randomUUID();
-    const feedbackRow = nextLifeEnqueue(await readLifeRow(feedbackId, args.store), "feedback", prepared.payload, scope.owner);
+    const currentFb = assertFeedbackSnapshot(await readLifeRow(feedbackId, args.store), {
+      owner: scope.owner,
+      actionId: args.action.id,
+      expectedVersion: expectedFeedbackVersion,
+      expectedLocalRev: expectedFeedbackLocalRev,
+    });
+    const opId = inTx?.id ?? existingOp?.id ?? crypto.randomUUID();
+    const feedbackRow = nextLifeEnqueue(currentFb, "feedback", prepared.payload, scope.owner);
     const op: LifeOp = {
       id: opId,
       owner_user_id: scope.owner,
@@ -392,7 +535,8 @@ export async function commitFeedbackCorrection(args: CommitCommon & {
       action_acked: false,
       feedback_payload: prepared.payload,
       action_payload: null,
-      created_at: inTx?.created_at ?? existingOpen?.created_at ?? Date.now(),
+      created_at: inTx?.created_at ?? existingOp?.created_at ?? Date.now(),
+      status_seq: (inTx?.status_seq ?? existingOp?.status_seq ?? 0) + 1,
     };
     await writeRows(op, feedbackRow, undefined, args.store);
     return { op, reusedCipher: prepared.reusedCipher };

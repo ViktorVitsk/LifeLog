@@ -22,6 +22,7 @@ import {
   setEncryptAllowed,
 } from "../lib/accountScope";
 import { establishKek, KeyUnverifiedError } from "../lib/kekUnlock";
+import { authResultStillCurrent } from "../lib/authSession";
 import { setAccountTimeZone } from "../lib/dates";
 
 const SESSION_STORAGE_KEY = "lifelog.session";
@@ -162,6 +163,12 @@ function applyScope(userId: string | null, encryptOk: boolean) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const recovering = useRef(false);
+  const authGen = useRef(0);
+
+  const beginAuthOp = () => {
+    authGen.current += 1;
+    return authGen.current;
+  };
 
   const [state, setState] = useState<AuthState>(() => {
     const persisted = readPersisted();
@@ -179,20 +186,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   });
 
-  const applyToken = useCallback((token: string) => {
+  const applyToken = useCallback((token: string, opGen?: number) => {
     const persisted = readPersisted();
-    if (persisted) writePersisted({ ...persisted, token });
+    const gen = opGen ?? authGen.current;
+    const userId = persisted?.userId ?? null;
+    if (!persisted || !userId) return;
+    if (!authResultStillCurrent({ token, expectedUserId: userId, opGen: gen, currentGen: authGen.current, currentUserId: userId })) {
+      return;
+    }
+    writePersisted({ ...persisted, token });
     setState((s) => (s.token === token ? s : { ...s, token, sessionExpired: false }));
   }, []);
 
   const setAuthenticated = useCallback(
     async (username: string, token: string, password: string, saltHex: string) => {
+      const gen = beginAuthOp();
       const { userId, timezone } = await resolveUserId(token);
+      if (
+        !authResultStillCurrent({
+          token,
+          expectedUserId: userId,
+          opGen: gen,
+          currentGen: authGen.current,
+          currentUserId: userId,
+        })
+      ) {
+        return;
+      }
       applyScope(userId, false);
       const kek = await deriveKEK(password, saltHex);
       const result = await establishKek({ kek, token, userId, allowBootstrap: true });
       if (result === "wrong_password") throw new WrongPasswordError();
       if (result !== "verified") throw new KeyUnverifiedError();
+      if (gen !== authGen.current) return;
       applyScope(userId, true);
       resetAuthExpiredGate();
       writePersisted({ token, username, salt: saltHex, userId });
@@ -214,13 +240,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const unlock = useCallback(async (password: string) => {
     const persisted = readPersisted();
     if (!persisted) throw new Error("no session to unlock");
-    applyScope(persisted.userId, false);
+    const gen = beginAuthOp();
+    const expectedUserId = persisted.userId;
+    applyScope(expectedUserId, false);
     const kek = await deriveKEK(password, persisted.salt);
 
     const result = await establishKek({
       kek,
       token: persisted.token,
-      userId: persisted.userId,
+      userId: expectedUserId,
       allowBootstrap: false,
     });
     if (result === "wrong_password") throw new WrongPasswordError();
@@ -234,8 +262,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await api.login(persisted.username, password);
       token = res.access_token;
     }
+    const current = readPersisted();
+    if (
+      !authResultStillCurrent({
+        token,
+        expectedUserId,
+        opGen: gen,
+        currentGen: authGen.current,
+        currentUserId: current?.userId ?? null,
+      })
+    ) {
+      return;
+    }
 
-    applyScope(persisted.userId, true);
+    applyScope(expectedUserId, true);
     resetAuthExpiredGate();
     writePersisted({ ...persisted, token });
     let timezone = "UTC";
@@ -246,11 +286,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* keep UTC */
     }
+    if (gen !== authGen.current) return;
     setState({
       token,
       username: persisted.username,
       salt: persisted.salt,
-      userId: persisted.userId,
+      userId: expectedUserId,
       kek,
       sessionExpired: false,
       kekVerified: true,
@@ -264,6 +305,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const salt = persisted?.salt ?? state.salt;
     const userId = persisted?.userId ?? state.userId;
     if (!username || !salt || !userId) throw new Error("no session to unlock");
+    const gen = beginAuthOp();
 
     applyScope(userId, false);
     const kek = await deriveKEK(password, salt);
@@ -277,6 +319,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result === "wrong_password") throw new WrongPasswordError();
     if (result !== "verified") throw new KeyUnverifiedError();
 
+    if (
+      !authResultStillCurrent({
+        token: res.access_token,
+        expectedUserId: userId,
+        opGen: gen,
+        currentGen: authGen.current,
+        currentUserId: readPersisted()?.userId ?? userId,
+      })
+    ) {
+      return;
+    }
     applyScope(userId, true);
     resetAuthExpiredGate();
     writePersisted({
@@ -293,6 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* keep previous */
     }
+    if (gen !== authGen.current) return;
     setState({
       token: res.access_token,
       kek,
@@ -307,6 +361,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient, state.salt, state.username, state.userId]);
 
   const logout = useCallback(() => {
+    beginAuthOp();
     resetAuthExpiredGate();
     clearPersisted();
     applyScope(null, false);
@@ -338,18 +393,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       recovering.current = true;
       const persisted = readPersisted();
       const token = persisted?.token;
+      const gen = authGen.current;
+      const expectedUserId = persisted?.userId;
       void (async () => {
-        if (token) {
+        if (token && expectedUserId) {
           try {
             const res = await api.refresh(token);
-            applyToken(res.access_token);
+            if (
+              !authResultStillCurrent({
+                token: res.access_token,
+                expectedUserId,
+                opGen: gen,
+                currentGen: authGen.current,
+                currentUserId: readPersisted()?.userId ?? null,
+              })
+            ) {
+              return;
+            }
+            applyToken(res.access_token, gen);
             await queryClient.invalidateQueries();
             return;
           } catch (e) {
             if (!isAuthError(e)) return;
           }
         }
-        markSessionExpired();
+        if (gen === authGen.current) markSessionExpired();
       })().finally(() => {
         recovering.current = false;
       });
@@ -365,11 +433,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const delay = exp
       ? Math.max(5_000, exp - Date.now() - REFRESH_SKEW_MS)
       : 45 * 60_000;
+    const gen = authGen.current;
+    const expectedUserId = readPersisted()?.userId;
     const timer = window.setTimeout(() => {
       void api
         .refresh(token)
         .then((res) => {
-          applyToken(res.access_token);
+          if (!expectedUserId) return;
+          if (
+            !authResultStillCurrent({
+              token: res.access_token,
+              expectedUserId,
+              opGen: gen,
+              currentGen: authGen.current,
+              currentUserId: readPersisted()?.userId ?? null,
+            })
+          ) {
+            return;
+          }
+          applyToken(res.access_token, gen);
         })
         .catch((e) => {
           if (isAuthError(e)) markSessionExpired();
@@ -380,13 +462,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateTimezone = useCallback(
     async (timezone: string) => {
-      if (!state.token) throw new Error("not authenticated");
+      if (!state.token || !state.userId) throw new Error("not authenticated");
+      const gen = authGen.current;
+      const expectedUserId = state.userId;
       const me = await api.putTimezone(state.token, timezone);
       const zone = me.timezone || timezone;
+      if (
+        !authResultStillCurrent({
+          token: state.token,
+          expectedUserId,
+          opGen: gen,
+          currentGen: authGen.current,
+          currentUserId: readPersisted()?.userId ?? null,
+        })
+      ) {
+        return;
+      }
       setAccountTimeZone(zone);
-      setState((s) => ({ ...s, timezone: zone }));
+      setState((s) => (s.userId === expectedUserId ? { ...s, timezone: zone } : s));
     },
-    [state.token],
+    [state.token, state.userId],
   );
 
   const value = useMemo<AuthContextValue>(

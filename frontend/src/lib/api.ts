@@ -54,12 +54,14 @@ function emitAuthExpired(): void {
 
 export interface RegisterResponse {
   salt: string;
+  kdf_version: number;
 }
 
 export interface LoginResponse {
   access_token: string;
   token_type: string;
   salt: string;
+  kdf_version: number;
 }
 
 export interface MeResponse {

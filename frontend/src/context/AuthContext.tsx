@@ -33,6 +33,7 @@ interface PersistedSession {
   username: string;
   salt: string;
   userId: string;
+  kdfVersion: number;
 }
 
 export interface AuthState {
@@ -52,6 +53,7 @@ export interface AuthContextValue extends AuthState {
     token: string,
     password: string,
     saltHex: string,
+    kdfVersion?: number,
   ) => Promise<void>;
   unlock: (password: string) => Promise<void>;
   reauthenticate: (password: string) => Promise<void>;
@@ -75,7 +77,17 @@ function readPersisted(): PersistedSession | null {
       typeof parsed?.userId === "string" &&
       parsed.userId
     ) {
-      return parsed;
+      const next = {
+        token: parsed.token,
+        username: parsed.username,
+        salt: parsed.salt,
+        userId: parsed.userId,
+        kdfVersion: typeof parsed.kdfVersion === "number" ? parsed.kdfVersion : 1,
+      };
+      if (parsed.kdfVersion !== next.kdfVersion) {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      }
+      return next;
     }
     if (
       typeof parsed?.token === "string" &&
@@ -84,7 +96,13 @@ function readPersisted(): PersistedSession | null {
     ) {
       const userId = jwtSub(parsed.token);
       if (!userId) return null;
-      const next = { token: parsed.token, username: parsed.username, salt: parsed.salt, userId };
+      const next = {
+        token: parsed.token,
+        username: parsed.username,
+        salt: parsed.salt,
+        userId,
+        kdfVersion: 1,
+      };
       sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
       return next;
     }
@@ -199,7 +217,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setAuthenticated = useCallback(
-    async (username: string, token: string, password: string, saltHex: string) => {
+    async (
+      username: string,
+      token: string,
+      password: string,
+      saltHex: string,
+      kdfVersion = 1,
+    ) => {
       const gen = beginAuthOp();
       const { userId, timezone } = await resolveUserId(token);
       if (
@@ -214,14 +238,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       applyScope(userId, false);
-      const kek = await deriveKEK(password, saltHex);
+      const kek = await deriveKEK(password, saltHex, kdfVersion);
       const result = await establishKek({ kek, token, userId, allowBootstrap: true });
       if (result === "wrong_password") throw new WrongPasswordError();
       if (result !== "verified") throw new KeyUnverifiedError();
       if (gen !== authGen.current) return;
       applyScope(userId, true);
       resetAuthExpiredGate();
-      writePersisted({ token, username, salt: saltHex, userId });
+      writePersisted({ token, username, salt: saltHex, userId, kdfVersion });
       queryClient.clear();
       setState({
         token,
@@ -243,7 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const gen = beginAuthOp();
     const expectedUserId = persisted.userId;
     applyScope(expectedUserId, false);
-    const kek = await deriveKEK(password, persisted.salt);
+    const kek = await deriveKEK(password, persisted.salt, persisted.kdfVersion);
 
     const result = await establishKek({
       kek,
@@ -308,8 +332,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const gen = beginAuthOp();
 
     applyScope(userId, false);
-    const kek = await deriveKEK(password, salt);
     const res = await api.login(username, password);
+    const kdfVersion = res.kdf_version ?? persisted?.kdfVersion ?? 1;
+    const kek = await deriveKEK(password, res.salt || salt, kdfVersion);
     const result = await establishKek({
       kek,
       token: res.access_token,
@@ -337,6 +362,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       username,
       salt: res.salt || salt,
       userId,
+      kdfVersion,
     });
     let timezone = state.timezone || "UTC";
     try {

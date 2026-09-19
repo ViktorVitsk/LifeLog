@@ -17,6 +17,18 @@ const PBKDF2_ITERATIONS = 100_000;
 const AES_GCM_IV_BYTES = 12;
 const AES_GCM_TAG_BITS = 128;
 
+export interface KdfParameters {
+  iterations: number;
+  hash: "SHA-256";
+}
+
+export function kdfParametersForVersion(version: number): KdfParameters {
+  if (version === 1) {
+    return { iterations: PBKDF2_ITERATIONS, hash: "SHA-256" };
+  }
+  throw new Error(`unsupported_kdf_version:${version}`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Low-level helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,8 +76,20 @@ function concatBytes(
 /**
  * Derive the Key Encryption Key (KEK) from the master password + user salt.
  * Run ONCE on login. Keep result only in React state (memory).
+ *
+ * A future version 2 must be activated only after the user enters the password:
+ * derive and verify v1, derive v2, then wrap a transiently exportable v1 KEK
+ * with v2 into a dedicated opaque migration envelope before the server switches
+ * `kdf_version`. Existing `encrypted_dek` values and content stay untouched.
+ * The envelope needs its own schema migration; changing only `kdf_version`
+ * would make existing data undecryptable.
  */
-export async function deriveKEK(password: string, saltHex: string): Promise<CryptoKey> {
+export async function deriveKEK(
+  password: string,
+  saltHex: string,
+  kdfVersion = 1,
+): Promise<CryptoKey> {
+  const parameters = kdfParametersForVersion(kdfVersion);
   const passwordKey = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),
@@ -78,8 +102,8 @@ export async function deriveKEK(password: string, saltHex: string): Promise<Cryp
     {
       name: "PBKDF2",
       salt: hexToBytes(saltHex),
-      iterations: PBKDF2_ITERATIONS,
-      hash: "SHA-256",
+      iterations: parameters.iterations,
+      hash: parameters.hash,
     },
     passwordKey,
     { name: "AES-GCM", length: 256 },

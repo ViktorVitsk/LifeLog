@@ -62,7 +62,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             detail="Username already taken",
         ) from None
     logger.info("user registered id=%s", user.id)
-    return RegisterResponse(salt=salt)
+    return RegisterResponse(salt=salt, kdf_version=user.kdf_version)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -92,7 +92,11 @@ async def login(
     login_throttle.reset(throttle_key)
     token = create_access_token(subject=user.id)
     logger.info("user login id=%s", user.id)
-    return LoginResponse(access_token=token, salt=user.password_salt)
+    return LoginResponse(
+        access_token=token,
+        salt=user.password_salt,
+        kdf_version=user.kdf_version,
+    )
 
 
 @router.post("/refresh", response_model=RefreshResponse)

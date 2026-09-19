@@ -29,7 +29,13 @@ export default function LoginPage() {
         await api.register(username, password, browserTimeZone());
       }
       const res = await api.login(username, password);
-      await auth.setAuthenticated(username, res.access_token, password, res.salt);
+      await auth.setAuthenticated(
+        username,
+        res.access_token,
+        password,
+        res.salt,
+        res.kdf_version,
+      );
       navigate("/", { replace: true });
     } catch (e) {
       setError((e as Error).message);

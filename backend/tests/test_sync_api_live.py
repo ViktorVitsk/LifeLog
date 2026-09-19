@@ -35,8 +35,11 @@ def _register_login(client: httpx.Client, username: str) -> str:
     password = "qa_b1_pass"
     reg = client.post(f"{BASE}/api/auth/register", json={"username": username, "password": password})
     assert reg.status_code in (201, 409)
+    if reg.status_code == 201:
+        assert reg.json()["kdf_version"] == 1
     login = client.post(f"{BASE}/api/auth/login", json={"username": username, "password": password})
     assert login.status_code == 200
+    assert login.json()["kdf_version"] == 1
     return login.json()["access_token"]
 
 

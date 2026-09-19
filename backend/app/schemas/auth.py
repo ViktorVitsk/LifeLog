@@ -15,6 +15,7 @@ class RegisterResponse(BaseModel):
     `salt` is a hex-encoded 32-byte random value stored in `users.password_salt`.
     """
     salt: str
+    kdf_version: int = 1
 
 
 class LoginRequest(BaseModel):
@@ -26,6 +27,7 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     salt: str
+    kdf_version: int = 1
 
 
 class RefreshResponse(BaseModel):

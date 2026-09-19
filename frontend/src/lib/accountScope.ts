@@ -1,9 +1,20 @@
 /** In-memory account scope for Dexie / sync. Set by AuthContext. */
 
+export interface SaveScope {
+  owner: string;
+  sessionId: number;
+}
+
 let currentUserId: string | null = null;
 let encryptAllowed = false;
+let sessionId = 0;
+
+export function getSessionId(): number {
+  return sessionId;
+}
 
 export function setCurrentUserId(id: string | null): void {
+  if (id !== currentUserId) sessionId += 1;
   currentUserId = id;
 }
 
@@ -26,6 +37,15 @@ export function isEncryptAllowed(): boolean {
 
 export function assertEncryptAllowed(): void {
   if (!encryptAllowed) throw new Error("kek_unverified");
+}
+
+export function captureSaveScope(): SaveScope {
+  assertEncryptAllowed();
+  return { owner: requireCurrentUserId(), sessionId };
+}
+
+export function isCurrentSession(id: number): boolean {
+  return sessionId === id;
 }
 
 export function jwtSub(token: string): string | null {

@@ -13,6 +13,20 @@ SYNC_REJECTED = "rejected"
 SYNC_DELETED = "deleted"
 
 
+def iso_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def id_tuple(values: Any) -> tuple[str, ...]:
+    if not values:
+        return ()
+    return tuple(sorted(str(item) for item in values))
+
+
 def blob_fingerprint(data: Mapping[str, Any], extra: tuple[Any, ...] = ()) -> tuple[Any, ...]:
     return (
         data.get("encrypted_dek"),
@@ -41,7 +55,9 @@ def decide_life_item(
         if existing is None:
             return SYNC_DELETED, None
         incoming_v = incoming.get("version")
-        if incoming_v is not None and int(incoming_v) != int(existing.get("version") or 1):
+        if incoming_v is None:
+            return SYNC_CONFLICT, "version_required"
+        if int(incoming_v) != int(existing.get("version") or 1):
             return SYNC_CONFLICT, "version_mismatch"
         return SYNC_DELETED, None
 
@@ -55,7 +71,9 @@ def decide_life_item(
         return SYNC_DUPLICATE, None
 
     incoming_v = incoming.get("version")
+    if incoming_v is None:
+        return SYNC_CONFLICT, "version_required"
     existing_v = int(existing.get("version") or 1)
-    if incoming_v is not None and int(incoming_v) != existing_v:
+    if int(incoming_v) != existing_v:
         return SYNC_CONFLICT, "version_mismatch"
     return SYNC_UPDATED, None

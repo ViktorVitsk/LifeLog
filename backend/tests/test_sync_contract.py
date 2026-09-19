@@ -56,9 +56,24 @@ def test_identical_retry_is_duplicate():
     assert reason is None
 
 
-def test_same_id_different_ciphertext_is_conflict():
+def test_same_id_different_ciphertext_matching_version_is_updated():
+    incoming = _incoming(encrypted_content="new", version=1)
+    existing = {**incoming, "encrypted_content": "old", "user_id": USER, "version": 1}
+    status, reason = decide_sync_item(
+        incoming,
+        user_id=USER,
+        existing=existing,
+        owned_skill_ids=set(),
+        owned_habit_ids=set(),
+        owned_context_ids=set(),
+    )
+    assert status == "updated"
+    assert reason is None
+
+
+def test_same_id_different_ciphertext_without_version_is_conflict():
     incoming = _incoming(encrypted_content="new")
-    existing = {**incoming, "encrypted_content": "old", "user_id": USER}
+    existing = {**incoming, "encrypted_content": "old", "user_id": USER, "version": 1}
     status, reason = decide_sync_item(
         incoming,
         user_id=USER,
@@ -68,7 +83,22 @@ def test_same_id_different_ciphertext_is_conflict():
         owned_context_ids=set(),
     )
     assert status == "conflict"
-    assert reason == "content_mismatch"
+    assert reason == "version_required"
+
+
+def test_stale_version_update_is_conflict():
+    incoming = _incoming(encrypted_content="new", version=1)
+    existing = {**incoming, "encrypted_content": "old", "user_id": USER, "version": 2}
+    status, reason = decide_sync_item(
+        incoming,
+        user_id=USER,
+        existing=existing,
+        owned_skill_ids=set(),
+        owned_habit_ids=set(),
+        owned_context_ids=set(),
+    )
+    assert status == "conflict"
+    assert reason == "version_mismatch"
 
 
 def test_id_owned_by_other_user_is_rejected_without_leak():

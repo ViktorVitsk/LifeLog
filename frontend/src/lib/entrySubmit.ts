@@ -1,9 +1,9 @@
-import { enqueueEntry } from "../db/offlineQueue";
-import { appConfirmation } from "../agent/confirmation";
-import { encryptEntry } from "./crypto";
-import type { EntrySyncPayload } from "./api";
-import { assertEncryptAllowed } from "./accountScope";
-import { getAccountTimeZone } from "./dates";
+import { enqueueEntry } from "../db/offlineQueue.ts";
+import { appConfirmation } from "../agent/confirmation.ts";
+import { encryptEntry } from "./crypto.ts";
+import type { EntrySyncPayload } from "./api.ts";
+import { captureSaveScope, type SaveScope } from "./accountScope.ts";
+import { getAccountTimeZone } from "./dates.ts";
 
 export async function encryptAndEnqueue(args: {
   kek: CryptoKey;
@@ -15,8 +15,11 @@ export async function encryptAndEnqueue(args: {
   timestamp?: string;
   id?: string;
   confirmation_source?: "entry_card" | "manual_form";
+  scope?: SaveScope;
+  /** Test hook: runs after encryption, before enqueue. */
+  afterEncrypt?: () => Promise<void>;
 }): Promise<{ id: string }> {
-  assertEncryptAllowed();
+  const scope = args.scope ?? captureSaveScope();
   const { kek, entry_type, openFields } = args;
 
   const confirm =
@@ -70,6 +73,7 @@ export async function encryptAndEnqueue(args: {
     event_timezone: getAccountTimeZone(),
   };
 
-  await enqueueEntry(payload);
+  if (args.afterEncrypt) await args.afterEncrypt();
+  await enqueueEntry(payload, scope);
   return { id };
 }

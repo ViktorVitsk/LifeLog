@@ -85,18 +85,40 @@ def test_live_sync_contract_mixed_batch():
         assert retry.status_code == 200
         assert retry.json()["results"][0]["status"] == "duplicate"
 
-        conflict = client.post(
+        missing_version = client.post(
             f"{BASE}/api/entries/sync",
             headers=headers_b,
             json={"entries": [_entry(created_id, encrypted_content="other")]},
         )
-        assert conflict.status_code == 200
-        assert conflict.json()["results"][0]["status"] == "conflict"
+        assert missing_version.status_code == 200
+        assert missing_version.json()["results"][0]["status"] == "conflict"
+        assert missing_version.json()["results"][0]["reason"] == "version_required"
+
+        updated = client.post(
+            f"{BASE}/api/entries/sync",
+            headers=headers_b,
+            json={"entries": [_entry(created_id, encrypted_content="other", version=1)]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["results"][0]["status"] == "updated"
+
+        stale = client.post(
+            f"{BASE}/api/entries/sync",
+            headers=headers_b,
+            json={"entries": [_entry(created_id, encrypted_content="third", version=1)]},
+        )
+        assert stale.status_code == 200
+        assert stale.json()["results"][0]["status"] == "conflict"
+        assert stale.json()["results"][0]["reason"] == "version_mismatch"
+
+        tombs = client.get(f"{BASE}/api/entries/tombstones", headers=headers_b)
+        assert tombs.status_code == 200
+        assert isinstance(tombs.json()["items"], list)
 
         gone = client.post(
             f"{BASE}/api/entries/sync",
             headers=headers_b,
-            json={"entries": [{**created_payload, "deleted": True, "version": 1}]},
+            json={"entries": [{**created_payload, "encrypted_content": "other", "deleted": True, "version": 2}]},
         )
         assert gone.status_code == 200
         assert gone.json()["results"][0]["status"] == "deleted"

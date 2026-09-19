@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { partitionOwned, jwtSub, setCurrentUserId, getCurrentUserId } from "./accountScope.ts";
+import {
+  partitionOwned,
+  jwtSub,
+  setCurrentUserId,
+  getCurrentUserId,
+  getSessionId,
+  captureSaveScope,
+  setEncryptAllowed,
+} from "./accountScope.ts";
 
 describe("A4 account scope", () => {
   it("does not treat ownerless rows as the current user", () => {
@@ -40,5 +48,18 @@ describe("A4 account scope", () => {
     assert.equal(getCurrentUserId(), "u1");
     setCurrentUserId(null);
     assert.equal(getCurrentUserId(), null);
+  });
+
+  it("increments sessionId when the account changes", () => {
+    setCurrentUserId("u1");
+    setEncryptAllowed(true);
+    const first = getSessionId();
+    const scope = captureSaveScope();
+    assert.equal(scope.owner, "u1");
+    assert.equal(scope.sessionId, first);
+    setCurrentUserId("u2");
+    assert.equal(getSessionId(), first + 1);
+    setEncryptAllowed(false);
+    setCurrentUserId(null);
   });
 });

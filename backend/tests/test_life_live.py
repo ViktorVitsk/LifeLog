@@ -145,6 +145,47 @@ def test_live_goal_memory_action_cycle():
         )
         assert act.json()["results"][0]["status"] == "created"
 
+        review = client.post(
+            f"{BASE}/api/life/actions/sync",
+            headers=headers,
+            json={
+                "items": [
+                    {
+                        "id": action_id,
+                        "goal_id": goal_id,
+                        "state": "accepted",
+                        "review_at": "2026-09-26T12:00:00+00:00",
+                        "encrypted_dek": "dek",
+                        "encrypted_content": "act-ct",
+                        "version": 1,
+                    }
+                ]
+            },
+        )
+        assert review.json()["results"][0]["status"] == "updated"
+
+        stale = client.post(
+            f"{BASE}/api/life/actions/sync",
+            headers=headers,
+            json={
+                "items": [
+                    {
+                        "id": action_id,
+                        "goal_id": goal_id,
+                        "state": "active",
+                        "encrypted_dek": "dek",
+                        "encrypted_content": "act-ct-2",
+                        "version": 1,
+                    }
+                ]
+            },
+        )
+        assert stale.json()["results"][0]["status"] == "conflict"
+
+        tombs = client.get(f"{BASE}/api/life/tombstones", headers=headers)
+        assert tombs.status_code == 200
+        assert isinstance(tombs.json()["items"], list)
+
         fb = client.post(
             f"{BASE}/api/life/feedback/sync",
             headers=headers,

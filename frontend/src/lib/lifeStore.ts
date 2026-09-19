@@ -1,82 +1,88 @@
-import { assertEncryptAllowed, requireCurrentUserId } from "./accountScope.ts";
 import { api, type LifeBundle, type LifeSyncResponse } from "./api.ts";
-import { encryptEntry } from "./crypto.ts";
-import { db, type LifeKind, type PendingLife } from "../db/offlineQueue.ts";
+import type { PendingLife } from "../db/offlineQueue.ts";
 import { planQueueUpdates } from "../sync/syncContract.ts";
+import { withSyncLock } from "./syncLock.ts";
 import { assembleMemoryProfile } from "./lifeProfile.ts";
+import {
+  applyLifeAck,
+  encryptLifePayload,
+  enqueueLife,
+  getPendingLife,
+  listOwnedLife,
+  nextLifeEnqueue,
+  lifeSyncPayload,
+  readLifeRow,
+  writeLife,
+} from "./lifeQueue.ts";
 
-export { assembleMemoryProfile };
+export {
+  assembleMemoryProfile,
+  applyLifeAck,
+  encryptLifePayload,
+  enqueueLife,
+  getPendingLife,
+  listOwnedLife,
+  nextLifeEnqueue,
+};
 
-export async function enqueueLife(kind: LifeKind, payload: Record<string, unknown>): Promise<void> {
-  assertEncryptAllowed();
-  const owner = requireCurrentUserId();
-  const id = String(payload.id);
-  await db.life_queue.put({
-    id,
-    kind,
-    payload,
-    status: "pending",
-    owner_user_id: owner,
-    queued_at: Date.now(),
+async function applyLifePlan(
+  resp: LifeSyncResponse,
+  sent: { id: string; rev: number }[],
+): Promise<void> {
+  const byId = new Map(sent.map((item) => [item.id, item.rev]));
+  const plan = planQueueUpdates(resp, sent.map((item) => item.id));
+  for (const id of new Set([...plan.markSynced, ...plan.markRejected.map((r) => r.id), ...plan.ackDelete])) {
+    const row = await readLifeRow(id);
+    if (!row) continue;
+    const result = resp.results.find((item) => item.id === id) ?? {
+      id,
+      status: plan.ackDelete.includes(id) ? "deleted" : "updated",
+    };
+    await writeLife(applyLifeAck(row, byId.get(id) ?? row.local_rev ?? 1, result));
+  }
+}
+
+async function flushKind(
+  rows: PendingLife[],
+  send: (items: Record<string, unknown>[]) => Promise<LifeSyncResponse>,
+): Promise<number> {
+  if (!rows.length) return 0;
+  const sent = rows.map((row) => {
+    const rev = row.local_rev ?? 1;
+    row.inflight_rev = rev;
+    return { id: row.id, rev };
   });
-}
-
-export async function getPendingLife(userId: string): Promise<PendingLife[]> {
-  const rows = await db.life_queue.where("status").anyOf(["pending", "error"]).toArray();
-  return rows.filter((row) => row.owner_user_id === userId);
-}
-
-async function applyLifePlan(resp: LifeSyncResponse, ids: string[]): Promise<void> {
-  const plan = planQueueUpdates(resp, ids);
-  if (plan.markSynced.length) {
-    await db.life_queue.where("id").anyOf(plan.markSynced).modify((row) => {
-      row.status = "synced";
-    });
-  }
-  for (const item of plan.markRejected) {
-    await db.life_queue.update(item.id, { status: "rejected", last_error: item.reason });
-  }
+  for (const row of rows) await writeLife(row);
+  const resp = await send(rows.map((row) => lifeSyncPayload(row)));
+  await applyLifePlan(resp, sent);
+  return resp.saved.length;
 }
 
 export async function flushLifeQueue(token: string, userId: string): Promise<number> {
-  const pending = await getPendingLife(userId);
-  if (!pending.length) return 0;
-  const byKind = {
-    goal: pending.filter((row) => row.kind === "goal"),
-    memory: pending.filter((row) => row.kind === "memory"),
-    action: pending.filter((row) => row.kind === "action"),
-    feedback: pending.filter((row) => row.kind === "feedback"),
-  };
-  let saved = 0;
-  if (byKind.goal.length) {
-    const resp = await api.syncLifeGoals(token, byKind.goal.map((row) => row.payload as never));
-    await applyLifePlan(resp, byKind.goal.map((row) => row.id));
-    saved += resp.saved.length;
-  }
-  if (byKind.memory.length) {
-    const resp = await api.syncLifeMemory(token, byKind.memory.map((row) => row.payload as never));
-    await applyLifePlan(resp, byKind.memory.map((row) => row.id));
-    saved += resp.saved.length;
-  }
-  if (byKind.action.length) {
-    const resp = await api.syncLifeActions(token, byKind.action.map((row) => row.payload as never));
-    await applyLifePlan(resp, byKind.action.map((row) => row.id));
-    saved += resp.saved.length;
-  }
-  if (byKind.feedback.length) {
-    const resp = await api.syncLifeFeedback(token, byKind.feedback.map((row) => row.payload as never));
-    await applyLifePlan(resp, byKind.feedback.map((row) => row.id));
-    saved += resp.saved.length;
-  }
-  return saved;
-}
-
-export async function encryptLifePayload(
-  kek: CryptoKey,
-  body: Record<string, unknown>,
-): Promise<{ encrypted_dek: string; encrypted_content: string }> {
-  const { encryptedContent, encryptedDek } = await encryptEntry(JSON.stringify(body), kek);
-  return { encrypted_content: encryptedContent, encrypted_dek: encryptedDek };
+  return withSyncLock(async () => {
+    const pending = await getPendingLife(userId);
+    if (!pending.length) return 0;
+    const byKind = {
+      goal: pending.filter((row) => row.kind === "goal"),
+      memory: pending.filter((row) => row.kind === "memory"),
+      action: pending.filter((row) => row.kind === "action"),
+      feedback: pending.filter((row) => row.kind === "feedback"),
+    };
+    let saved = 0;
+    if (byKind.goal.length) {
+      saved += await flushKind(byKind.goal, (items) => api.syncLifeGoals(token, items as never));
+    }
+    if (byKind.memory.length) {
+      saved += await flushKind(byKind.memory, (items) => api.syncLifeMemory(token, items as never));
+    }
+    if (byKind.action.length) {
+      saved += await flushKind(byKind.action, (items) => api.syncLifeActions(token, items as never));
+    }
+    if (byKind.feedback.length) {
+      saved += await flushKind(byKind.feedback, (items) => api.syncLifeFeedback(token, items as never));
+    }
+    return saved;
+  });
 }
 
 export type { LifeBundle };

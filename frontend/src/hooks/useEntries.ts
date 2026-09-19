@@ -18,12 +18,14 @@ import { mergeEntryStreams } from "../sync/mergeEntries";
  * NEVER decrypted in this hook — that's the architecture's whole point.
  */
 
-export type MergedEntry = EntryRead & { _source: "server" | "pending" | "error" | "rejected" };
+export type MergedEntry = EntryRead & { _source: "server" | "pending" | "error" | "rejected" | "conflict" };
 
 function normalizeLocal(p: PendingEntry): MergedEntry {
   const source: MergedEntry["_source"] =
     p.status === "rejected"
       ? "rejected"
+      : p.status === "conflict"
+        ? "conflict"
       : p.status === "error"
         ? "error"
         : p.status === "synced"
@@ -76,6 +78,7 @@ export function useEntries() {
           (r.status === "pending" ||
             r.status === "error" ||
             r.status === "rejected" ||
+            r.status === "conflict" ||
             r.status === "pending_delete") &&
           userId &&
           r.owner_user_id === userId,

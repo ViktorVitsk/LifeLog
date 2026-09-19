@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,7 +143,7 @@ async def sync_entries(
     )
 
     results: list[SyncItemResult] = []
-    created = duplicate = conflict = rejected = deleted = 0
+    created = duplicate = conflict = rejected = deleted = updated = 0
 
     for item in payload.entries:
         incoming = item.model_dump()
@@ -169,6 +169,31 @@ async def sync_entries(
                     existing_by_id[item.id] = _entry_as_dict(live)
             results.append(SyncItemResult(id=item.id, status="deleted"))
             deleted += 1
+            continue
+
+        if status_name == "updated":
+            live = (
+                await db.execute(select(Entry).where(Entry.id == item.id, Entry.user_id == user_id))
+            ).scalar_one_or_none()
+            expected = (live.version if live is not None else 1) or 1
+            values = {
+                k: v
+                for k, v in _row_values(item, user_id, account_tz).items()
+                if k not in {"id", "user_id", "version"}
+            }
+            stmt = (
+                update(Entry)
+                .where(Entry.id == item.id, Entry.user_id == user_id, Entry.version == expected)
+                .values(**values, version=expected + 1)
+            )
+            cas = await db.execute(stmt)
+            if (cas.rowcount or 0) != 1:
+                results.append(SyncItemResult(id=item.id, status="conflict", reason="version_mismatch"))
+                conflict += 1
+                continue
+            results.append(SyncItemResult(id=item.id, status="updated", version=expected + 1))
+            existing_by_id[item.id] = {**incoming, "user_id": user_id, "version": expected + 1, "deleted_at": None}
+            updated += 1
             continue
 
         if status_name != "created":
@@ -221,18 +246,19 @@ async def sync_entries(
 
     await db.commit()
 
-    saved = [row.id for row in results if row.status in ("created", "duplicate")]
+    saved = [row.id for row in results if row.status in ("created", "duplicate", "updated")]
     errors = [
         {"id": str(row.id), "reason": row.reason}
         for row in results
         if row.status in ("conflict", "rejected")
     ]
     logger.info(
-        "sync ok user=%s received=%d created=%d duplicate=%d conflict=%d rejected=%d deleted=%d",
+        "sync ok user=%s received=%d created=%d duplicate=%d updated=%d conflict=%d rejected=%d deleted=%d",
         user_id,
         len(payload.entries),
         created,
         duplicate,
+        updated,
         conflict,
         rejected,
         deleted,
@@ -270,6 +296,21 @@ async def list_entries(
 
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+@router.get("/tombstones")
+async def list_entry_tombstones(
+    since: datetime | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    stmt = select(Entry.id, Entry.deleted_at, Entry.version).where(
+        Entry.user_id == current_user.id, Entry.deleted_at.is_not(None)
+    )
+    if since is not None:
+        stmt = stmt.where(Entry.deleted_at >= since)
+    rows = (await db.execute(stmt)).all()
+    return {"items": [{"id": row[0], "deleted_at": row[1], "version": row[2]} for row in rows]}
 
 
 @router.get("/{entry_id}", response_model=EntryRead)

@@ -1,13 +1,17 @@
 import {
   ackDeletes,
+  applyEntryTombstones,
   getEntryStatuses,
   getPendingForSync,
   markError,
+  markInflight,
   markRejected,
   markSynced,
 } from "../db/offlineQueue";
 import { api, isAuthError, isNetworkError, type EntrySyncPayload } from "../lib/api";
+import { applyLifeTombstones } from "../lib/lifeQueue";
 import { flushLifeQueue } from "../lib/lifeStore";
+import { withSyncLock } from "../lib/syncLock.ts";
 import { planQueueUpdates } from "./syncContract.ts";
 
 /**
@@ -22,7 +26,11 @@ export interface SyncResult {
 }
 
 export async function runSyncOnce(token: string, userId?: string): Promise<SyncResult> {
-  if (!navigator.onLine) {
+  return withSyncLock(() => runSyncOnceUnlocked(token, userId));
+}
+
+async function runSyncOnceUnlocked(token: string, userId?: string): Promise<SyncResult> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { attempted: 0, saved: 0, failed: 0, error: "offline" };
   }
 
@@ -65,14 +73,25 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
   }));
 
   try {
+    const sentRevs = await markInflight(ids);
     const resp = await api.syncEntries(payload, token);
     const after = await getEntryStatuses(ids);
     const deletingIds = pending.filter((p) => p.status === "pending_delete" || p.deleted).map((p) => p.id);
     const hideCreatedIfTombstone = ids.filter((id) => after[id] === "pending_delete");
     const plan = planQueueUpdates(resp, ids, { deletingIds, hideCreatedIfTombstone });
-    await markSynced(plan.markSynced);
+    const versions: Record<string, number> = {};
+    for (const row of resp.results ?? []) {
+      if (typeof row.version === "number") versions[row.id] = row.version;
+    }
+    await markSynced(plan.markSynced, { sentRevs, versions });
     await markRejected(plan.markRejected);
     await ackDeletes(plan.ackDelete);
+    try {
+      const tombs = await api.getEntryTombstones(token);
+      await applyEntryTombstones((tombs.items ?? []).map((item) => item.id));
+    } catch {
+      /* tombstone pull is best-effort; local pending rows stay */
+    }
     return {
       attempted: pending.length,
       saved: plan.markSynced.length,
@@ -129,6 +148,12 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
     inFlight = (async () => {
       const r = await runSyncOnce(token, userId);
       const lifeSaved = await flushLifeQueue(token, userId).catch(() => 0);
+      try {
+        const tombs = await api.getLifeTombstones(token);
+        await applyLifeTombstones((tombs.items ?? []).map((item) => item.id));
+      } catch {
+        /* keep local life rows unless an explicit tombstone arrives */
+      }
       onResult?.(lifeSaved ? { ...r, saved: r.saved + lifeSaved } : r);
     })().finally(() => {
       inFlight = null;

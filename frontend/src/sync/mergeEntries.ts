@@ -1,4 +1,4 @@
-export type LocalQueueStatus = "pending" | "synced" | "error" | "rejected" | "pending_delete";
+export type LocalQueueStatus = "pending" | "synced" | "error" | "rejected" | "conflict" | "pending_delete";
 
 export interface LocalEntryRow {
   id: string;
@@ -10,7 +10,7 @@ export interface Mergeable {
   id: string;
 }
 
-export type MergedSource = "server" | "pending" | "error" | "rejected";
+export type MergedSource = "server" | "pending" | "error" | "rejected" | "conflict";
 
 function sourceOf(status: LocalQueueStatus): MergedSource {
   if (status === "synced" || status === "pending_delete") return "server";

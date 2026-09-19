@@ -1,9 +1,10 @@
-export type SyncItemStatus = "created" | "duplicate" | "conflict" | "rejected" | "deleted";
+export type SyncItemStatus = "created" | "duplicate" | "updated" | "conflict" | "rejected" | "deleted";
 
 export interface SyncItemResult {
   id: string;
   status: string;
   reason?: string | null;
+  version?: number | null;
 }
 
 export interface SyncApiResponse {
@@ -13,7 +14,7 @@ export interface SyncApiResponse {
 
 export interface QueueUpdatePlan {
   markSynced: string[];
-  markRejected: { id: string; reason: string }[];
+  markRejected: { id: string; reason: string; conflict?: boolean }[];
   ackDelete: string[];
   leavePending: string[];
 }
@@ -39,7 +40,7 @@ export function planQueueUpdates(
   const deleting = new Set(opts.deletingIds ?? []);
   const tombstones = new Set(opts.hideCreatedIfTombstone ?? []);
   const markSynced: string[] = [];
-  const markRejected: { id: string; reason: string }[] = [];
+  const markRejected: { id: string; reason: string; conflict?: boolean }[] = [];
   const ackDelete: string[] = [];
   const seen = new Set<string>();
 
@@ -52,7 +53,7 @@ export function planQueueUpdates(
         return;
       }
       if (status === "conflict" || status === "rejected") {
-        markRejected.push({ id, reason: reason ?? status });
+        markRejected.push({ id, reason: reason ?? status, conflict: status === "conflict" });
       }
       return;
     }
@@ -64,7 +65,7 @@ export function planQueueUpdates(
       return;
     }
     if (status === "conflict" || status === "rejected") {
-      markRejected.push({ id, reason: reason ?? status });
+      markRejected.push({ id, reason: reason ?? status, conflict: status === "conflict" });
     }
   };
 

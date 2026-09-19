@@ -16,6 +16,7 @@ SYNC_DUPLICATE = "duplicate"
 SYNC_CONFLICT = "conflict"
 SYNC_REJECTED = "rejected"
 SYNC_DELETED = "deleted"
+SYNC_UPDATED = "updated"
 
 
 class SyncStatus(StrEnum):
@@ -24,6 +25,7 @@ class SyncStatus(StrEnum):
     CONFLICT = SYNC_CONFLICT
     REJECTED = SYNC_REJECTED
     DELETED = SYNC_DELETED
+    UPDATED = SYNC_UPDATED
 
 
 INT_1_10 = frozenset(
@@ -262,9 +264,11 @@ def decide_sync_item(
             return SyncStatus.REJECTED, "already_deleted"
         if entry_fingerprint(incoming) == entry_fingerprint(existing):
             return SyncStatus.DUPLICATE, None
+        if incoming.get("version") is None:
+            return SyncStatus.CONFLICT, "version_required"
         if versions_conflict(incoming, existing):
             return SyncStatus.CONFLICT, "version_mismatch"
-        return SyncStatus.CONFLICT, "content_mismatch"
+        return SyncStatus.UPDATED, None
 
     if incoming_deleted:
         return SyncStatus.DELETED, None

@@ -284,7 +284,7 @@ export const api = {
   ): Promise<{
     saved: string[];
     errors: unknown[];
-    results?: { id: string; status: string; reason?: string | null }[];
+    results?: { id: string; status: string; reason?: string | null; version?: number | null }[];
   }> {
     return request("/api/entries/sync", {
       method: "POST",
@@ -488,6 +488,19 @@ export const api = {
       token,
       body: JSON.stringify(body),
     });
+  },
+
+  async getEntryTombstones(token: string, since?: string): Promise<{ items: { id: string; deleted_at: string; version?: number }[] }> {
+    const q = since ? `?since=${encodeURIComponent(since)}` : "";
+    return request(`/api/entries/tombstones${q}`, { token });
+  },
+
+  async getLifeTombstones(
+    token: string,
+    since?: string,
+  ): Promise<{ items: { id: string; kind: string; deleted_at: string; version?: number }[] }> {
+    const q = since ? `?since=${encodeURIComponent(since)}` : "";
+    return request(`/api/life/tombstones${q}`, { token });
   },
 
   async getLife(token: string): Promise<LifeBundle> {

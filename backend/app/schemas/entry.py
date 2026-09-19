@@ -92,8 +92,9 @@ class EntrySyncRequest(BaseModel):
 
 class SyncItemResult(BaseModel):
     id: UUID
-    status: Literal["created", "duplicate", "conflict", "rejected", "deleted"]
+    status: Literal["created", "duplicate", "conflict", "rejected", "deleted", "updated"]
     reason: str | None = None
+    version: int | None = None
 
 
 class EntrySyncResponse(BaseModel):

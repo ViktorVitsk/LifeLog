@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -40,7 +40,7 @@ from app.schemas.life import (
     MemorySyncItem,
     MemorySyncRequest,
 )
-from app.services.life_sync import decide_life_item
+from app.services.life_sync import decide_life_item, id_tuple, iso_key
 
 router = APIRouter(prefix="/api/life", tags=["life"])
 
@@ -65,6 +65,37 @@ def _apply_blob(row, item, *, extra: dict | None = None) -> None:
     if extra:
         for key, value in extra.items():
             setattr(row, key, value)
+
+
+async def _cas_update(db: AsyncSession, model, row, expected: int, values: dict) -> bool:
+    stmt = (
+        update(model)
+        .where(model.id == row.id, model.user_id == row.user_id, model.version == expected)
+        .values(**values, version=expected + 1, updated_at=_now())
+    )
+    result = await db.execute(stmt)
+    if (result.rowcount or 0) != 1:
+        return False
+    await db.refresh(row)
+    return True
+
+
+async def _goal_extra(db: AsyncSession, goal_id: UUID, review_at, habit_ids, skill_ids, entry_ids) -> tuple:
+    if habit_ids is None:
+        habit_ids = (await db.execute(select(GoalHabitLink.habit_id).where(GoalHabitLink.goal_id == goal_id))).scalars().all()
+    if skill_ids is None:
+        skill_ids = (await db.execute(select(GoalSkillLink.skill_id).where(GoalSkillLink.goal_id == goal_id))).scalars().all()
+    if entry_ids is None:
+        entry_ids = (await db.execute(select(GoalEntryLink.entry_id).where(GoalEntryLink.goal_id == goal_id))).scalars().all()
+    return (iso_key(review_at), id_tuple(habit_ids), id_tuple(skill_ids), id_tuple(entry_ids))
+
+
+async def _memory_extra(db: AsyncSession, memory_id: UUID, kind, origin, reviewed_at, entry_ids) -> tuple:
+    if entry_ids is None:
+        entry_ids = (
+            await db.execute(select(MemoryEntryLink.entry_id).where(MemoryEntryLink.memory_id == memory_id))
+        ).scalars().all()
+    return (kind, origin, iso_key(reviewed_at), id_tuple(entry_ids))
 
 
 @router.get("", response_model=LifeBundle)
@@ -160,6 +191,32 @@ async def list_life(
     )
 
 
+@router.get("/tombstones")
+async def list_life_tombstones(
+    since: datetime | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    uid = current_user.id
+
+    async def collect(model, kind: str) -> list[dict]:
+        stmt = select(model.id, model.deleted_at, model.version).where(
+            model.user_id == uid, model.deleted_at.is_not(None)
+        )
+        if since is not None:
+            stmt = stmt.where(model.deleted_at >= since)
+        rows = (await db.execute(stmt)).all()
+        return [{"id": row[0], "kind": kind, "deleted_at": row[1], "version": row[2]} for row in rows]
+
+    items = [
+        *(await collect(Goal, "goal")),
+        *(await collect(MemoryItem, "memory")),
+        *(await collect(PlannedAction, "action")),
+        *(await collect(ActionFeedback, "feedback")),
+    ]
+    return {"items": items}
+
+
 def _state_ok(value: str, allowed: set[str]) -> bool:
     return value in allowed
 
@@ -205,11 +262,11 @@ async def _sync_goals(
                 "version": existing.version,
                 "deleted_at": existing.deleted_at,
             }
-            extra_existing = (existing.review_at,)
+            extra_existing = await _goal_extra(db, existing.id, existing.review_at, None, None, None)
         status, reason = decide_life_item(
             item.model_dump(),
             existing_data,
-            extra_incoming=(item.review_at,),
+            extra_incoming=await _goal_extra(db, item.id, item.review_at, item.habit_ids, item.skill_ids, item.entry_ids),
             extra_existing=extra_existing,
         )
         if status == "created":
@@ -227,9 +284,22 @@ async def _sync_goals(
             results.append(LifeSyncResult(id=item.id, status=status, version=1))
             saved.append(item.id)
         elif status == "updated" and existing is not None:
-            existing.state = item.state
-            existing.review_at = item.review_at
-            _apply_blob(existing, item)
+            expected = existing.version or 1
+            ok = await _cas_update(
+                db,
+                Goal,
+                existing,
+                expected,
+                {
+                    "state": item.state,
+                    "review_at": item.review_at,
+                    "encrypted_dek": item.encrypted_dek,
+                    "encrypted_content": item.encrypted_content,
+                },
+            )
+            if not ok:
+                results.append(LifeSyncResult(id=item.id, status="conflict", reason="version_mismatch", version=expected))
+                continue
             await _write_goal_links(db, uid, item)
             results.append(LifeSyncResult(id=item.id, status=status, version=existing.version))
             saved.append(item.id)
@@ -300,11 +370,15 @@ async def sync_memory(
                 "version": existing.version,
                 "deleted_at": existing.deleted_at,
             }
-            extra_ex = (existing.kind, existing.origin)
+            extra_ex = await _memory_extra(
+                db, existing.id, existing.kind, existing.origin, existing.reviewed_at, None
+            )
         status, reason = decide_life_item(
             item.model_dump(),
             existing_data,
-            extra_incoming=(item.kind, item.origin),
+            extra_incoming=await _memory_extra(
+                db, item.id, item.kind, item.origin, item.reviewed_at, item.entry_ids
+            ),
             extra_existing=extra_ex,
         )
         if status == "created":
@@ -327,11 +401,24 @@ async def sync_memory(
             results.append(LifeSyncResult(id=item.id, status=status, version=1))
             saved.append(item.id)
         elif status == "updated" and existing is not None:
-            existing.kind = item.kind
-            existing.state = item.state
-            existing.origin = item.origin
-            existing.reviewed_at = item.reviewed_at
-            _apply_blob(existing, item)
+            expected = existing.version or 1
+            ok = await _cas_update(
+                db,
+                MemoryItem,
+                existing,
+                expected,
+                {
+                    "kind": item.kind,
+                    "state": item.state,
+                    "origin": item.origin,
+                    "reviewed_at": item.reviewed_at,
+                    "encrypted_dek": item.encrypted_dek,
+                    "encrypted_content": item.encrypted_content,
+                },
+            )
+            if not ok:
+                results.append(LifeSyncResult(id=item.id, status="conflict", reason="version_mismatch", version=expected))
+                continue
             await db.execute(delete(MemoryEntryLink).where(MemoryEntryLink.memory_id == item.id))
             db.add_all(
                 [MemoryEntryLink(memory_id=item.id, entry_id=eid, user_id=uid) for eid in item.entry_ids]
@@ -383,11 +470,23 @@ async def sync_actions(
                 "version": existing.version,
                 "deleted_at": existing.deleted_at,
             }
-            extra_ex = (existing.goal_id, existing.result_metric)
+            extra_ex = (
+                existing.goal_id,
+                existing.result_metric,
+                iso_key(existing.period_start),
+                iso_key(existing.period_end),
+                iso_key(existing.review_at),
+            )
         status, reason = decide_life_item(
             item.model_dump(),
             existing_data,
-            extra_incoming=(item.goal_id, item.result_metric),
+            extra_incoming=(
+                item.goal_id,
+                item.result_metric,
+                iso_key(item.period_start),
+                iso_key(item.period_end),
+                iso_key(item.review_at),
+            ),
             extra_existing=extra_ex,
         )
         if status == "created":
@@ -408,13 +507,26 @@ async def sync_actions(
             results.append(LifeSyncResult(id=item.id, status=status, version=1))
             saved.append(item.id)
         elif status == "updated" and existing is not None:
-            existing.goal_id = item.goal_id
-            existing.state = item.state
-            existing.result_metric = item.result_metric
-            existing.period_start = item.period_start
-            existing.period_end = item.period_end
-            existing.review_at = item.review_at
-            _apply_blob(existing, item)
+            expected = existing.version or 1
+            ok = await _cas_update(
+                db,
+                PlannedAction,
+                existing,
+                expected,
+                {
+                    "goal_id": item.goal_id,
+                    "state": item.state,
+                    "result_metric": item.result_metric,
+                    "period_start": item.period_start,
+                    "period_end": item.period_end,
+                    "review_at": item.review_at,
+                    "encrypted_dek": item.encrypted_dek,
+                    "encrypted_content": item.encrypted_content,
+                },
+            )
+            if not ok:
+                results.append(LifeSyncResult(id=item.id, status="conflict", reason="version_mismatch", version=expected))
+                continue
             results.append(LifeSyncResult(id=item.id, status=status, version=existing.version))
             saved.append(item.id)
         elif status == "deleted" and existing is not None and existing.deleted_at is None:
@@ -484,9 +596,22 @@ async def sync_feedback(
             results.append(LifeSyncResult(id=item.id, status=status, version=1))
             saved.append(item.id)
         elif status == "updated" and existing is not None:
-            existing.action_id = item.action_id
-            existing.outcome_kind = item.outcome_kind
-            _apply_blob(existing, item)
+            expected = existing.version or 1
+            ok = await _cas_update(
+                db,
+                ActionFeedback,
+                existing,
+                expected,
+                {
+                    "action_id": item.action_id,
+                    "outcome_kind": item.outcome_kind,
+                    "encrypted_dek": item.encrypted_dek,
+                    "encrypted_content": item.encrypted_content,
+                },
+            )
+            if not ok:
+                results.append(LifeSyncResult(id=item.id, status="conflict", reason="version_mismatch", version=expected))
+                continue
             results.append(LifeSyncResult(id=item.id, status=status, version=existing.version))
             saved.append(item.id)
         elif status == "deleted" and existing is not None and existing.deleted_at is None:

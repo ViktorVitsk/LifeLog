@@ -12,7 +12,7 @@ from app.core.security import (
 
 
 def test_refresh_keeps_original_session_start():
-    started = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    started = datetime.now(UTC).replace(microsecond=0) - timedelta(days=1)
     token = create_access_token(
         uuid4(),
         expires_delta=timedelta(hours=1),
@@ -34,3 +34,16 @@ def test_refresh_rejects_session_at_absolute_ceiling():
             max_age=timedelta(days=30),
             now=now,
         )
+
+
+def test_refreshed_token_expiry_is_capped_at_absolute_ceiling():
+    started = datetime.now(UTC).replace(microsecond=0) - timedelta(days=29)
+    token = create_access_token(
+        uuid4(),
+        expires_delta=timedelta(days=7),
+        session_started_at=started,
+    )
+
+    payload = decode_access_token(token)
+
+    assert datetime.fromtimestamp(payload["exp"], UTC) == started + timedelta(days=30)

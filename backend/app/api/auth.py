@@ -1,17 +1,21 @@
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import (
+    JWTError,
     create_access_token,
+    decode_access_token,
     generate_pbkdf2_salt,
     hash_password,
+    validate_refresh_session,
     verify_password,
 )
 from app.models import User
@@ -100,8 +104,25 @@ async def login(
 
 
 @router.post("/refresh", response_model=RefreshResponse)
-async def refresh(current_user: User = Depends(get_current_user)) -> RefreshResponse:
-    token = create_access_token(subject=current_user.id)
+async def refresh(
+    current_user: User = Depends(get_current_user),
+    source_token: str = Depends(oauth2_scheme),
+) -> RefreshResponse:
+    try:
+        started_at = validate_refresh_session(
+            decode_access_token(source_token),
+            max_age=timedelta(minutes=settings.session_absolute_expire_minutes),
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session lifetime exceeded",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    token = create_access_token(
+        subject=current_user.id,
+        session_started_at=started_at,
+    )
     return RefreshResponse(access_token=token)
 
 

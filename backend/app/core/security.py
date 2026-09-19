@@ -30,14 +30,27 @@ def generate_pbkdf2_salt() -> str:
     return secrets.token_hex(32)
 
 
-def create_access_token(subject: UUID | str, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.now(UTC) + (
+def create_access_token(
+    subject: UUID | str,
+    expires_delta: timedelta | None = None,
+    *,
+    session_started_at: datetime | None = None,
+) -> str:
+    now = datetime.now(UTC)
+    started_at = session_started_at or now
+    if started_at.tzinfo is None:
+        raise ValueError("session_started_at must be timezone-aware")
+    started_at = started_at.astimezone(UTC)
+    rolling_expire = now + (
         expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
+    )
+    absolute_expire = started_at + timedelta(
+        minutes=settings.session_absolute_expire_minutes,
     )
     payload = {
         "sub": str(subject),
-        "exp": expire,
-        "iat": datetime.now(UTC),
+        "exp": min(rolling_expire, absolute_expire),
+        "iat": started_at,
         "type": "access",
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -48,11 +61,31 @@ def decode_access_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
 
 
+def validate_refresh_session(
+    payload: dict,
+    *,
+    max_age: timedelta,
+    now: datetime | None = None,
+) -> datetime:
+    raw_iat = payload.get("iat")
+    if isinstance(raw_iat, bool) or not isinstance(raw_iat, (int, float)):
+        raise JWTError("missing session start")
+    try:
+        started_at = datetime.fromtimestamp(raw_iat, UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise JWTError("invalid session start") from exc
+    current = now or datetime.now(UTC)
+    if started_at > current or current - started_at >= max_age:
+        raise JWTError("absolute session lifetime exceeded")
+    return started_at
+
+
 __all__ = [
     "JWTError",
     "create_access_token",
     "decode_access_token",
     "generate_pbkdf2_salt",
     "hash_password",
+    "validate_refresh_session",
     "verify_password",
 ]

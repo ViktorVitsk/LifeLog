@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useEntries, type MergedEntry } from "../hooks/useEntries";
@@ -13,18 +14,25 @@ export default function JournalPage() {
   const { locale, t } = useLocale();
   const loc = dateLocale(locale);
   const { entries, isLoading } = useEntries();
+  const [params] = useSearchParams();
+  const focusId = params.get("entry");
   const [tagFilter, setTagFilter] = useState("");
   const [preview, setPreview] = useState<{ title: string; body: string } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [openedFocus, setOpenedFocus] = useState<string | null>(null);
+
+  const focused = useMemo(() => entries.find((e) => e.id === focusId), [entries, focusId]);
+  const missingFocus = Boolean(focusId && !isLoading && !focused);
 
   const filtered = useMemo(() => {
     const q = tagFilter.trim().toLowerCase();
     return entries.filter((e) => {
+      if (focusId && e.id === focusId) return true;
       if (!JOURNAL_TYPES.has(e.entry_type)) return false;
       if (!q) return true;
       return (e.tags ?? []).some((tag) => tag.toLowerCase().includes(q));
     });
-  }, [entries, tagFilter]);
+  }, [entries, tagFilter, focusId]);
 
   async function openEntry(e: MergedEntry) {
     if (!kek) {
@@ -52,12 +60,21 @@ export default function JournalPage() {
     }
   }
 
+  useEffect(() => {
+    if (!focused || openedFocus === focused.id) return;
+    setOpenedFocus(focused.id);
+    document.getElementById(`entry-${focused.id}`)?.scrollIntoView({ block: "center" });
+    void openEntry(focused);
+  }, [focused, openedFocus]);
+
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{t.timelineTitle}</h1>
         <p className="text-sm text-zinc-400 mt-1">{t.timelineHint}</p>
       </div>
+
+      {missingFocus && <p className="text-xs text-amber-200">{t.weeklySourceMissing}</p>}
 
       <div>
         <label className="text-sm text-zinc-300">{t.tagContains}</label>
@@ -75,7 +92,10 @@ export default function JournalPage() {
         {filtered.map((e) => (
           <li
             key={e.id}
-            className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 flex flex-wrap items-center justify-between gap-2"
+            id={`entry-${e.id}`}
+            className={`rounded border bg-zinc-900/40 px-3 py-2 flex flex-wrap items-center justify-between gap-2 ${
+              e.id === focusId ? "border-indigo-500 ring-1 ring-indigo-500/40" : "border-zinc-800"
+            }`}
           >
             <div>
               <div className="text-sm text-zinc-200">{entryTypeLabel(t, e.entry_type)}</div>

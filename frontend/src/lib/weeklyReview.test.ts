@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildWeeklyReview, weekPeriods } from "./weeklyReview.ts";
+import { buildWeeklyReview, reviewFlagsFromQueue, weekPeriods } from "./weeklyReview.ts";
 import type { LifeBundle } from "./api.ts";
 
 const emptyBundle = (): LifeBundle => ({
@@ -126,5 +126,25 @@ describe("weekly review", () => {
     assert.equal(delta?.previous_n, 0);
     assert.equal(delta?.note, "missing_is_not_zero");
     assert.equal(delta?.mean_delta, undefined);
+  });
+
+  it("marks pending and conflict rows as preliminary, not as a finished result", () => {
+    const flags = reviewFlagsFromQueue([
+      { id: "a", status: "pending" },
+      { id: "b", status: "conflict" },
+      { id: "c", status: "synced" },
+    ]);
+    assert.deepEqual(flags.conflictIds, ["b"]);
+    assert.equal(flags.preliminary, true);
+    const review = buildWeeklyReview({
+      now: new Date("2026-09-19T12:00:00.000Z"),
+      timeZone: "UTC",
+      entries: [],
+      bundle: emptyBundle(),
+      conflictIds: flags.conflictIds,
+      preliminary: flags.preliminary,
+    });
+    assert.equal(review.sources.unresolved_conflicts, true);
+    assert.equal(review.sources.preliminary, true);
   });
 });

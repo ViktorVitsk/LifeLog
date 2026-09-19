@@ -75,18 +75,30 @@ export default function SettingsPage() {
       const report = snap.report as {
         completeness?: string;
         sections?: { entries?: { exported?: number; failed?: number }; chat?: { exported?: number; failed?: number } };
+        sync_status?: { conflict?: number };
       };
       const chat = snap.chat_turns as unknown[];
       const exported = report.sections?.entries?.exported ?? (snap.entries as unknown[] | undefined)?.length ?? 0;
       const failed =
         (report.sections?.entries?.failed ?? 0) +
         (report.sections?.chat?.failed ?? 0);
+      const conflicts = report.sync_status?.conflict ?? 0;
+      const lifeConflicts = (["goals", "memory", "actions", "feedback"] as const).reduce((n, key) => {
+        const rows = (snap as Record<string, unknown>)[key];
+        if (!Array.isArray(rows)) return n;
+        return n + rows.filter((row) => (row as { sync_status?: string }).sync_status === "conflict").length;
+      }, 0);
       setMsg(
-        t.exportReport
-          .replace("{n}", String(exported))
-          .replace("{chat}", String(chat.length))
-          .replace("{err}", String(failed))
-          .replace("{completeness}", String(snap.completeness ?? report.completeness ?? "")),
+        [
+          t.exportReport
+            .replace("{n}", String(exported))
+            .replace("{chat}", String(chat.length))
+            .replace("{err}", String(failed))
+            .replace("{completeness}", String(snap.completeness ?? report.completeness ?? "")),
+          conflicts + lifeConflicts > 0 ? t.exportConflicts.replace("{n}", String(conflicts + lifeConflicts)) : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
       );
     } catch (e) {
       if (e instanceof ExportCancelledError) setMsg(t.exportCancelled);

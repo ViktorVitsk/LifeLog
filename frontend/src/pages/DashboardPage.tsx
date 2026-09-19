@@ -9,7 +9,7 @@ import { useEntries } from "../hooks/useEntries";
 import { useMergedLife } from "../hooks/useMergedLife";
 import { isNetworkError } from "../lib/api";
 import { getAccountTimeZone } from "../lib/dates";
-import { buildWeeklyReview } from "../lib/weeklyReview";
+import { buildWeeklyReview, reviewFlagsFromQueue } from "../lib/weeklyReview";
 
 export default function DashboardPage() {
   const { t } = useLocale();
@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const goalPlain = useDecryptedMap(life.bundle.goals, kek);
   const actionPlain = useDecryptedMap(life.bundle.actions, kek);
   const feedbackPlain = useDecryptedMap(life.bundle.feedback, kek);
+  const flags = reviewFlagsFromQueue(life.local);
   const weekly = buildWeeklyReview({
     now: new Date(),
     timeZone: timezone || getAccountTimeZone(),
@@ -27,6 +28,8 @@ export default function DashboardPage() {
     goalPlain,
     actionPlain,
     feedbackPlain,
+    conflictIds: flags.conflictIds,
+    preliminary: flags.preliminary,
   });
   const offline: boolean = error ? isNetworkError(error) : false;
 
@@ -47,7 +50,11 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      <WeeklyReviewCard review={weekly} />
+      <WeeklyReviewCard
+        review={weekly}
+        knownEntryIds={new Set(entries.map((e) => e.id))}
+        knownActionIds={new Set(life.bundle.actions.map((a) => a.id))}
+      />
 
       <TodayWidgets entries={entries} />
 

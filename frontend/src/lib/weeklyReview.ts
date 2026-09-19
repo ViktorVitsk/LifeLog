@@ -350,6 +350,17 @@ function sliceWeek(args: {
   };
 }
 
+export function reviewFlagsFromQueue(rows: { id: string; status: string }[]): {
+  conflictIds: string[];
+  preliminary: boolean;
+} {
+  const conflictIds = rows.filter((row) => row.status === "conflict").map((row) => row.id);
+  return {
+    conflictIds,
+    preliminary: rows.some((row) => ["pending", "error", "conflict", "pending_delete"].includes(row.status)),
+  };
+}
+
 export function buildWeeklyReview(args: {
   now: Date;
   timeZone: string;
@@ -359,6 +370,7 @@ export function buildWeeklyReview(args: {
   actionPlain?: Record<string, Record<string, unknown>>;
   feedbackPlain?: Record<string, Record<string, unknown>>;
   conflictIds?: string[];
+  preliminary?: boolean;
 }): WeeklyReview {
   const { current, previous } = weekPeriods(args.now, args.timeZone);
   const cur = sliceWeek({ period: current, ...args });
@@ -404,7 +416,7 @@ export function buildWeeklyReview(args: {
       ...cur.feedback.map((f) => ({ kind: "feedback" as const, id: f.id, version: f.version })),
       ...prev.feedback.map((f) => ({ kind: "feedback" as const, id: f.id, version: f.version })),
     ],
-    preliminary: Boolean(args.conflictIds?.length),
+    preliminary: Boolean(args.preliminary || args.conflictIds?.length),
     unresolved_conflicts: Boolean(args.conflictIds?.length),
   };
   return {

@@ -1,5 +1,5 @@
 import { captureSaveScope, type SaveScope } from "./accountScope.ts";
-import { db, type LifeOp, type PendingLife } from "../db/offlineQueue.ts";
+import { getLifeDb, type LifeOp, type PendingLife } from "../db/offlineQueue.ts";
 import { getTestQueue } from "../db/testQueue.ts";
 import type { LifeActionRead, LifeFeedbackRead } from "./api.ts";
 import {
@@ -29,7 +29,7 @@ export function opDeliveryLabel(op: LifeOp, feedback?: PendingLife, action?: Pen
 
 export async function listLifeOps(owner: string): Promise<LifeOp[]> {
   const test = getTestQueue();
-  const rows = test ? [...test.ops.values()] : await db.life_ops.toArray();
+  const rows = test ? [...test.ops.values()] : await getLifeDb().life_ops.toArray();
   return rows.filter((row) => row.owner_user_id === owner);
 }
 
@@ -47,7 +47,7 @@ export async function putLifeOp(op: LifeOp): Promise<void> {
     test.ops.set(op.id, op);
     return;
   }
-  await db.life_ops.put(op);
+  await getLifeDb().life_ops.put(op);
 }
 
 async function writeOpTransaction(op: LifeOp, feedback: PendingLife, action?: PendingLife): Promise<void> {
@@ -58,10 +58,11 @@ async function writeOpTransaction(op: LifeOp, feedback: PendingLife, action?: Pe
     test.ops.set(op.id, op);
     return;
   }
-  await db.transaction("rw", db.life_queue, db.life_ops, async () => {
-    await db.life_queue.put(feedback);
-    if (action) await db.life_queue.put(action);
-    await db.life_ops.put(op);
+  const store = getLifeDb();
+  await store.transaction("rw", store.life_queue, store.life_ops, async () => {
+    await store.life_queue.put(feedback);
+    if (action) await store.life_queue.put(action);
+    await store.life_ops.put(op);
   });
 }
 

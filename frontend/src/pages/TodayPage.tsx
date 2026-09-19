@@ -22,7 +22,7 @@ import Briefing from "../components/today/Briefing";
 import WeeklyReviewCard from "../components/WeeklyReviewCard";
 import { useDecryptedMap } from "../components/CipherCard";
 import { getAccountTimeZone } from "../lib/dates";
-import { buildWeeklyReview } from "../lib/weeklyReview";
+import { buildWeeklyReview, reviewFlagsFromQueue } from "../lib/weeklyReview";
 import ChartBlock from "../components/today/ChartBlock";
 import Composer from "../components/today/Composer";
 import EntryCard from "../components/today/EntryCard";
@@ -59,6 +59,7 @@ export default function TodayPage() {
   const goalPlain = useDecryptedMap(life.bundle.goals, kek);
   const actionPlain = useDecryptedMap(life.bundle.actions, kek);
   const feedbackPlain = useDecryptedMap(life.bundle.feedback, kek);
+  const flags = reviewFlagsFromQueue(life.local);
   const weekly = buildWeeklyReview({
     now: new Date(),
     timeZone: timezone || getAccountTimeZone(),
@@ -67,6 +68,8 @@ export default function TodayPage() {
     goalPlain,
     actionPlain,
     feedbackPlain,
+    conflictIds: flags.conflictIds,
+    preliminary: flags.preliminary,
   });
   const [reviewPeriod, setReviewPeriod] = useState<ReviewPeriod>("1d");
 
@@ -463,7 +466,13 @@ export default function TodayPage() {
             </button>
           ))}
         </div>
-        {mode === "review" && reviewPeriod === "7d" && <WeeklyReviewCard review={weekly} />}
+        {mode === "review" && reviewPeriod === "7d" && (
+          <WeeklyReviewCard
+            review={weekly}
+            knownEntryIds={new Set(entries.map((e) => e.id))}
+            knownActionIds={new Set(life.bundle.actions.map((a) => a.id))}
+          />
+        )}
         {mode === "review" && (
           <div className="flex flex-wrap gap-1">
             {(["1d", "7d", "envelope"] as ReviewPeriod[]).map((item) => (

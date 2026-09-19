@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import CipherCard, { useDecryptedMap } from "../components/CipherCard";
 import WeeklyReviewCard from "../components/WeeklyReviewCard";
 import { useAuth } from "../context/AuthContext";
@@ -18,7 +19,7 @@ import type { SaveScope } from "../lib/accountScope";
 import type { TStrings } from "../i18n/strings";
 import type { LifeOp, PendingLife } from "../db/offlineQueue";
 import { calendarDayKey, getAccountTimeZone, shiftCivilDay, zonedWallTimeToUtc } from "../lib/dates";
-import { buildWeeklyReview } from "../lib/weeklyReview";
+import { buildWeeklyReview, reviewFlagsFromQueue } from "../lib/weeklyReview";
 
 function newId(): string {
   return crypto.randomUUID();
@@ -55,9 +56,13 @@ export default function LifePage() {
   const habits = useHabits().data ?? [];
   const { bundle, statuses, local } = useMergedLife();
   const { entries } = useEntries();
+  const [params] = useSearchParams();
+  const focusActionId = params.get("action");
+  const focusMode = params.get("focus");
   const goalPlain = useDecryptedMap(bundle.goals, kek);
   const actionPlain = useDecryptedMap(bundle.actions, kek);
   const feedbackPlain = useDecryptedMap(bundle.feedback, kek);
+  const flags = reviewFlagsFromQueue(local);
   const weekly = buildWeeklyReview({
     now: new Date(),
     timeZone: timezone || getAccountTimeZone(),
@@ -66,7 +71,10 @@ export default function LifePage() {
     goalPlain,
     actionPlain,
     feedbackPlain,
+    conflictIds: flags.conflictIds,
+    preliminary: flags.preliminary,
   });
+  const missingAction = Boolean(focusActionId && !bundle.actions.some((a) => a.id === focusActionId));
   const [ops, setOps] = useState<LifeOp[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -95,6 +103,11 @@ export default function LifePage() {
       await refreshOps();
     })();
   }, [token, userId]);
+
+  useEffect(() => {
+    if (!focusActionId) return;
+    document.getElementById(`life-action-${focusActionId}`)?.scrollIntoView({ block: "center" });
+  }, [focusActionId, bundle.actions.length]);
 
   async function persist(
     kind: "goal" | "memory" | "action" | "feedback",
@@ -348,8 +361,12 @@ export default function LifePage() {
       </div>
       {msg && <p className="text-xs text-zinc-400">{msg}</p>}
 
+      {missingAction && <p className="text-xs text-amber-200">{t.weeklySourceMissing}</p>}
+
       <WeeklyReviewCard
         review={weekly}
+        knownEntryIds={new Set(entries.map((e) => e.id))}
+        knownActionIds={new Set(bundle.actions.map((a) => a.id))}
         onSave={() => {
           const blob = new Blob([JSON.stringify(weekly, null, 2)], { type: "application/json" });
           const url = URL.createObjectURL(blob);
@@ -450,6 +467,8 @@ export default function LifePage() {
         {bundle.actions.map((a) => (
           <ActionRow
             key={a.id}
+            highlighted={a.id === focusActionId}
+            focusResult={a.id === focusActionId && focusMode === "result"}
             action={a}
             goalName={goalTitle(bundle.goals.find((g) => g.id === a.goal_id) ?? { id: a.goal_id } as LifeGoalRead)}
             kek={kek}
@@ -557,6 +576,8 @@ function ActionRow({
   feedbackPlain,
   op,
   extra,
+  highlighted,
+  focusResult,
   onReviewAt,
   onChangePlan,
   onFeedback,
@@ -568,6 +589,8 @@ function ActionRow({
   t: TStrings;
   outcomeLabel: (kind: string, t: TStrings) => string;
   extra?: ReactNode;
+  highlighted?: boolean;
+  focusResult?: boolean;
   feedback: LifeFeedbackRead[];
   feedbackPlain: Record<string, Record<string, unknown>>;
   op?: LifeOp;
@@ -599,7 +622,10 @@ function ActionRow({
           ? t.lifeOpOnDevice
           : null;
   return (
-    <div className="space-y-1 text-sm border-t border-zinc-800 pt-2">
+    <div
+      id={`life-action-${action.id}`}
+      className={`space-y-1 text-sm border-t pt-2 ${highlighted ? "border-indigo-500 ring-1 ring-indigo-500/30 rounded px-2" : "border-zinc-800"}`}
+    >
       <div className="flex justify-between gap-2">
         <div>
           <div className="text-xs text-zinc-400">{goalName}</div>
@@ -691,6 +717,7 @@ function ActionRow({
         <label className="block text-[11px] text-zinc-400">
           {t.lifeOutcome}
           <select
+            autoFocus={focusResult}
             className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
             value={outcome}
             onChange={(e) => setOutcome(e.target.value as UserOutcome | "")}

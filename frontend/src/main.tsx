@@ -5,7 +5,12 @@ import "./index.css";
 
 if (import.meta.env.DEV) {
   void import("./lib/queueIdbHarness").then((mod) => {
-    (window as unknown as { __queueIdbRace?: typeof mod.runQueueIdbRace }).__queueIdbRace = mod.runQueueIdbRace;
+    const w = window as unknown as {
+      __queueIdbRace?: typeof mod.runQueueIdbRace;
+      __queueIdbProd?: typeof mod.runProductionQueueIdb;
+    };
+    w.__queueIdbRace = mod.runQueueIdbRace;
+    w.__queueIdbProd = mod.runProductionQueueIdb;
   });
 }
 

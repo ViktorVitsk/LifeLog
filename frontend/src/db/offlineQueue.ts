@@ -103,8 +103,8 @@ export class LifeLogDB extends Dexie {
   life_queue!: EntityTable<PendingLife, "id">;
   life_ops!: EntityTable<LifeOp, "id">;
 
-  constructor() {
-    super("lifelog");
+  constructor(name = "lifelog") {
+    super(name);
     this.version(1).stores({
       entries: "id, status, entry_type, timestamp, queued_at",
     });
@@ -140,6 +140,27 @@ export class LifeLogDB extends Dexie {
 
 export const db = new LifeLogDB();
 
+let activeDb: LifeLogDB = db;
+
+export function getLifeDb(): LifeLogDB {
+  return activeDb;
+}
+
+/** Run production queue functions against a throwaway IndexedDB, then delete it. */
+export async function withIsolatedLifeDb<T>(fn: (iso: LifeLogDB) => Promise<T>): Promise<T> {
+  const name = `lifelog-iso-${crypto.randomUUID()}`;
+  const iso = new LifeLogDB(name);
+  const prev = activeDb;
+  activeDb = iso;
+  try {
+    return await fn(iso);
+  } finally {
+    activeDb = prev;
+    iso.close();
+    await Dexie.delete(name);
+  }
+}
+
 export function resolveWriteOwner(scope?: SaveScope): string {
   if (scope) return scope.owner;
   assertEncryptAllowed();
@@ -170,9 +191,10 @@ export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope)
     test.entries.set(payload.id, nextEntryEnqueue(test.entries.get(payload.id), payload, owner));
     return;
   }
-  await db.transaction("rw", db.entries, async () => {
-    const existing = await db.entries.get(payload.id);
-    await db.entries.put(nextEntryEnqueue(existing, payload, owner));
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
+    const existing = await store.entries.get(payload.id);
+    await store.entries.put(nextEntryEnqueue(existing, payload, owner));
   });
 }
 
@@ -242,8 +264,9 @@ export async function claimPendingEntries(limit = 50, userId?: string): Promise<
     }
     return snapshots;
   }
-  await db.transaction("rw", db.entries, async () => {
-    const rows = await db.entries
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
+    const rows = await store.entries
       .where("status")
       .anyOf(["pending", "error", "pending_delete"])
       .sortBy("queued_at");
@@ -252,7 +275,7 @@ export async function claimPendingEntries(limit = 50, userId?: string): Promise<
       if (row.owner_user_id !== owner) continue;
       const local_rev = row.local_rev ?? 1;
       row.inflight_rev = local_rev;
-      await db.entries.put(row);
+      await store.entries.put(row);
       snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
     }
   });
@@ -311,13 +334,14 @@ export async function applyEntryResult(
     else test.entries.set(snapshot.id, out.row);
     return;
   }
-  await db.transaction("rw", db.entries, async () => {
-    const row = await db.entries.get(snapshot.id);
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
+    const row = await store.entries.get(snapshot.id);
     if (!row) return;
     const out = applyToEntry(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, ack);
     if (out.ignored) return;
-    if (out.drop) await db.entries.delete(snapshot.id);
-    else await db.entries.put(out.row);
+    if (out.drop) await store.entries.delete(snapshot.id);
+    else await store.entries.put(out.row);
   });
 }
 
@@ -372,7 +396,7 @@ export async function getPendingForSync(limit = 50, userId?: string): Promise<Pe
   const test = getTestQueue();
   const rows = test
     ? [...test.entries.values()]
-    : await db.entries.where("status").anyOf(["pending", "error", "pending_delete"]).sortBy("queued_at");
+    : await getLifeDb().entries.where("status").anyOf(["pending", "error", "pending_delete"]).sortBy("queued_at");
   return rows
     .filter((r) => r.owner_user_id === owner && ["pending", "error", "pending_delete"].includes(r.status))
     .sort((a, b) => a.queued_at - b.queued_at)
@@ -382,7 +406,7 @@ export async function getPendingForSync(limit = 50, userId?: string): Promise<Pe
 export async function countPending(userId?: string): Promise<number> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return 0;
-  const rows = await db.entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
+  const rows = await getLifeDb().entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
   return rows.filter((r) => r.owner_user_id === owner).length;
 }
 
@@ -408,11 +432,12 @@ export async function markPendingDelete(ids: string[]): Promise<void> {
     }
     return;
   }
-  await db.transaction("rw", db.entries, async () => {
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
     for (const id of ids) {
-      const row = await db.entries.get(id);
+      const row = await store.entries.get(id);
       if (!row || row.owner_user_id !== owner) continue;
-      await db.entries.put(bump(row));
+      await store.entries.put(bump(row));
     }
   });
 }
@@ -445,17 +470,18 @@ export async function markInflight(ids: string[]): Promise<Record<string, number
     }
     return sent;
   }
-  const rows = await db.entries.bulkGet(ids);
+  const store = getLifeDb();
+  const rows = await store.entries.bulkGet(ids);
   for (const row of rows) {
     if (!row) continue;
     apply(row);
-    await db.entries.put(row);
+    await store.entries.put(row);
   }
   return sent;
 }
 
 export async function getEntryStatuses(ids: string[]): Promise<Record<string, QueueStatus>> {
-  const rows = await db.entries.bulkGet(ids);
+  const rows = await getLifeDb().entries.bulkGet(ids);
   const out: Record<string, QueueStatus> = {};
   for (const row of rows) {
     if (row) out[row.id] = row.status;
@@ -466,14 +492,14 @@ export async function getEntryStatuses(ids: string[]): Promise<Record<string, Qu
 export async function getRecentEntries(sinceMs: number): Promise<PendingEntry[]> {
   const owner = getCurrentUserId();
   const sinceIso = new Date(sinceMs).toISOString();
-  const rows = await db.entries.where("timestamp").above(sinceIso).toArray();
+  const rows = await getLifeDb().entries.where("timestamp").above(sinceIso).toArray();
   if (!owner) return [];
   return rows.filter((r) => r.owner_user_id === owner);
 }
 
 export async function pruneSynced(olderThanMs: number): Promise<number> {
   const cutoff = Date.now() - olderThanMs;
-  return db.entries
+  return getLifeDb().entries
     .where("status")
     .equals("synced")
     .and((e) => e.queued_at < cutoff)
@@ -484,20 +510,21 @@ export async function deleteLocalEntries(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const owner = getCurrentUserId();
   if (!owner) return;
-  const rows = await db.entries.bulkGet(ids);
+  const store = getLifeDb();
+  const rows = await store.entries.bulkGet(ids);
   const mine = rows.filter((r): r is PendingEntry => Boolean(r && r.owner_user_id === owner));
-  await db.entries.bulkDelete(mine.map((r) => r.id));
+  await store.entries.bulkDelete(mine.map((r) => r.id));
 }
 
 export async function listOrphanEntries(): Promise<PendingEntry[]> {
-  const rows = await db.entries.toArray();
+  const rows = await getLifeDb().entries.toArray();
   return rows.filter((r) => r.owner_user_id == null || r.owner_user_id === "");
 }
 
 export async function attachOrphansToUser(userId: string, ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   let n = 0;
-  await db.entries
+  await getLifeDb().entries
     .where("id")
     .anyOf(ids)
     .modify((row) => {
@@ -511,9 +538,10 @@ export async function attachOrphansToUser(userId: string, ids: string[]): Promis
 
 export async function deleteOrphanEntries(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const rows = await db.entries.bulkGet(ids);
+  const store = getLifeDb();
+  const rows = await store.entries.bulkGet(ids);
   const orphans = rows.filter((r): r is PendingEntry => Boolean(r && !r.owner_user_id));
-  await db.entries.bulkDelete(orphans.map((r) => r.id));
+  await store.entries.bulkDelete(orphans.map((r) => r.id));
 }
 
 export async function persistServerEntries(items: EntryRead[], owner: string): Promise<void> {
@@ -547,10 +575,11 @@ export async function persistServerEntries(items: EntryRead[], owner: string): P
     }
     return;
   }
-  await db.transaction("rw", db.entries, async () => {
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
     for (const item of items) {
-      const next = upsert(await db.entries.get(item.id), item);
-      if (next) await db.entries.put(next);
+      const next = upsert(await store.entries.get(item.id), item);
+      if (next) await store.entries.put(next);
     }
   });
 }
@@ -575,10 +604,11 @@ export async function applyEntryTombstones(
     }
     return;
   }
-  await db.transaction("rw", db.entries, async () => {
+  const store = getLifeDb();
+  await store.transaction("rw", store.entries, async () => {
     for (const item of items) {
-      const row = await db.entries.get(item.id);
-      if (droppable(row, item.version)) await db.entries.delete(item.id);
+      const row = await store.entries.get(item.id);
+      if (droppable(row, item.version)) await store.entries.delete(item.id);
     }
   });
 }

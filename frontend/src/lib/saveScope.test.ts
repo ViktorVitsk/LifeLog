@@ -7,8 +7,8 @@ import {
   setEncryptAllowed,
 } from "./accountScope.ts";
 import { encryptAndEnqueue } from "./entrySubmit.ts";
-import { getPendingForSync } from "../db/offlineQueue.ts";
-import { installTestQueue, uninstallTestQueue } from "../db/testQueue.ts";
+import { db, getPendingForSync } from "../db/offlineQueue.ts";
+import { resetTestDb } from "../test/resetDb.ts";
 import { encryptLifePayload, enqueueLife, getPendingLife } from "./lifeQueue.ts";
 
 const SALT = "ab".repeat(16);
@@ -18,14 +18,13 @@ async function kek(): Promise<CryptoKey> {
 }
 
 describe("save scope across account switch", () => {
-  afterEach(() => {
-    uninstallTestQueue();
+  afterEach(async () => {
+    await resetTestDb();
     setEncryptAllowed(false);
     setCurrentUserId(null);
   });
 
   it("keeps an entry owned by A when the account switches during encrypt", async () => {
-    const store = installTestQueue();
     setCurrentUserId("user-a");
     setEncryptAllowed(true);
     let release!: () => void;
@@ -45,7 +44,7 @@ describe("save scope across account switch", () => {
     release();
     const saved = await pending;
 
-    const row = store.entries.get(saved.id);
+    const row = await db.entries.get(saved.id);
     assert.equal(row?.owner_user_id, "user-a");
     assert.equal(getCurrentUserId(), "user-b");
     assert.equal((await getPendingForSync(50, "user-b")).length, 0);
@@ -53,7 +52,6 @@ describe("save scope across account switch", () => {
   });
 
   it("keeps a life item owned by A when the account switches during encrypt", async () => {
-    const store = installTestQueue();
     setCurrentUserId("user-a");
     setEncryptAllowed(true);
     let release!: () => void;
@@ -82,7 +80,7 @@ describe("save scope across account switch", () => {
     release();
     const id = await work;
 
-    assert.equal(store.life.get(id)?.owner_user_id, "user-a");
+    assert.equal((await db.life_queue.get(id))?.owner_user_id, "user-a");
     assert.equal((await getPendingLife("user-b")).length, 0);
     assert.equal((await getPendingLife("user-a")).length, 1);
   });

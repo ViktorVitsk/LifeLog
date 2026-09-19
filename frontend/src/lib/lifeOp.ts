@@ -57,8 +57,8 @@ export function opDeliveryLabel(op: LifeOp, feedback?: PendingLife, action?: Pen
 }
 
 async function listOps(owner: string, store?: LifeLogDB): Promise<LifeOp[]> {
-  const { test, db } = resolveQueueAccess(store);
-  const rows = test ? [...test.ops.values()] : db ? await db.life_ops.toArray() : [];
+  const { db } = resolveQueueAccess(store);
+  const rows = await db.life_ops.toArray();
   return rows.filter((row) => row.owner_user_id === owner);
 }
 
@@ -79,18 +79,13 @@ export async function findOpBySubmission(owner: string, submissionId: string, st
 }
 
 export async function putLifeOp(op: LifeOp, store?: LifeLogDB): Promise<void> {
-  const { test, db } = resolveQueueAccess(store);
-  if (test) {
-    test.ops.set(op.id, op);
-    return;
-  }
-  if (db) await db.life_ops.put(op);
+  const { db } = resolveQueueAccess(store);
+  await db.life_ops.put(op);
 }
 
 async function readOp(id: string, store?: LifeLogDB): Promise<LifeOp | undefined> {
-  const { test, db } = resolveQueueAccess(store);
-  if (test) return test.ops.get(id);
-  return db?.life_ops.get(id);
+  const { db } = resolveQueueAccess(store);
+  return db.life_ops.get(id);
 }
 
 function actionLooksNewer(existing: PendingLife | undefined, expectedVersion: number | null | undefined, expectedLocalRev?: number | null): boolean {
@@ -200,9 +195,7 @@ function sameFeedbackIntent(
 }
 
 async function runWriteTx<T>(store: LifeLogDB | undefined, fn: () => Promise<T>): Promise<T> {
-  const { test, db } = resolveQueueAccess(store);
-  if (test) return test.runTx(fn);
-  if (!db) return fn();
+  const { db } = resolveQueueAccess(store);
   return db.transaction("rw", db.life_queue, db.life_ops, fn);
 }
 
@@ -211,14 +204,7 @@ async function readActionInTx(id: string, store?: LifeLogDB): Promise<PendingLif
 }
 
 async function writeRows(op: LifeOp, feedback: PendingLife, action: PendingLife | undefined, store?: LifeLogDB): Promise<void> {
-  const { test, db } = resolveQueueAccess(store);
-  if (test) {
-    test.life.set(feedback.id, feedback);
-    if (action) test.life.set(action.id, action);
-    test.ops.set(op.id, op);
-    return;
-  }
-  if (!db) return;
+  const { db } = resolveQueueAccess(store);
   await db.life_queue.put(feedback);
   if (action) await db.life_queue.put(action);
   await db.life_ops.put(op);

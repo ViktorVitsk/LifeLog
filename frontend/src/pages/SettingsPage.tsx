@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { loadLlmSettings, probeLlm, saveLlmSettings } from "../agent/settingsStore";
-import { exportDecryptedTurns } from "../agent/chatStore";
 import { DEFAULT_LLM_SETTINGS, type ContextPolicy, type LlmProviderId, type LlmSettings } from "../agent/types";
 import LanguageSelect from "../components/LanguageSelect";
 import OrphanRecovery from "../components/OrphanRecovery";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
-import { api, type EntryRead, type ExportMetadataRow } from "../lib/api";
+import { api } from "../lib/api";
 import { COMMON_TIMEZONES } from "../lib/dates";
-import { decryptEntry } from "../lib/crypto";
-import { collectArrayPages, collectPages } from "../lib/paging";
+import { collectPages } from "../lib/paging";
+import { buildFullExport } from "../lib/exportSnapshot";
 
 function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -21,13 +20,8 @@ function downloadJson(filename: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function stripCipher(e: EntryRead | ExportMetadataRow) {
-  const { encrypted_content: _c, encrypted_dek: _d, ...rest } = e as EntryRead;
-  return rest;
-}
-
 export default function SettingsPage() {
-  const { token, kek, logout, username, timezone, updateTimezone } = useAuth();
+  const { token, kek, logout, username, timezone, updateTimezone, userId } = useAuth();
   const { t } = useLocale();
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,49 +56,25 @@ export default function SettingsPage() {
   }
 
   async function onFullExport() {
-    if (!token || !kek) {
+    if (!kek || !userId) {
       setMsg(t.unlockForExport);
       return;
     }
     setBusy("full");
     setMsg(null);
     try {
-      const { items: rows, pages } = await collectArrayPages(
-        (offset, limit) => api.listEntries(token, { limit, offset }),
-        200,
-      );
-      const out: Record<string, unknown>[] = [];
-      const decrypt_errors: { id: string; reason: string }[] = [];
-      for (const e of rows) {
-        const base = stripCipher(e);
-        try {
-          const raw = await decryptEntry(e.encrypted_content, e.encrypted_dek, kek);
-          const plaintext = JSON.parse(raw) as unknown;
-          out.push({ ...base, plaintext });
-        } catch {
-          decrypt_errors.push({ id: e.id, reason: "decrypt_failed" });
-          out.push({ ...base, plaintext: null, decrypt_error: true });
-        }
+      const snap = await buildFullExport({ token, kek, userId, timezone });
+      if (import.meta.env.DEV) {
+        (window as unknown as { __lastExport?: unknown }).__lastExport = snap;
       }
-      const chat = await exportDecryptedTurns(kek);
-      downloadJson(`lifelog-full-${new Date().toISOString().slice(0, 10)}.json`, {
-        generated_at: new Date().toISOString(),
-        timezone,
-        entries: out,
-        chat_turns: chat,
-        report: {
-          entry_pages: pages,
-          entry_count: out.length,
-          decrypt_ok: out.length - decrypt_errors.length,
-          decrypt_error_count: decrypt_errors.length,
-          decrypt_errors,
-        },
-      });
+      downloadJson(`lifelog-full-${new Date().toISOString().slice(0, 10)}.json`, snap);
+      const report = snap.report as { entry_count: number; decrypt_error_count: number };
+      const chat = snap.chat_turns as unknown[];
       setMsg(
         t.exportReport
-          .replace("{n}", String(out.length))
+          .replace("{n}", String(report.entry_count))
           .replace("{chat}", String(chat.length))
-          .replace("{err}", String(decrypt_errors.length)),
+          .replace("{err}", String(report.decrypt_error_count)),
       );
     } catch (e) {
       setMsg((e as Error).message);
@@ -190,13 +160,17 @@ export default function SettingsPage() {
                 base_url:
                   provider === "ollama"
                     ? "http://localhost:11434/v1"
-                    : "https://openrouter.ai/api/v1",
-                model: provider === "ollama" ? "qwen2.5:7b" : "deepseek/deepseek-v4.1-flash",
+                    : provider === "synthetic"
+                      ? "synthetic://local"
+                      : "https://openrouter.ai/api/v1",
+                model:
+                  provider === "ollama" ? "qwen2.5:7b" : provider === "synthetic" ? "script" : "deepseek/deepseek-v4.1-flash",
               }));
             }}
           >
             <option value="openrouter">OpenRouter</option>
             <option value="ollama">Ollama (local)</option>
+            {import.meta.env.DEV && <option value="synthetic">Synthetic (dev)</option>}
           </select>
         </label>
         <label className="block text-sm">

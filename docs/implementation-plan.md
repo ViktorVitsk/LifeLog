@@ -21,6 +21,7 @@ Living document. A stage is not done just because files exist — behaviour chec
 | B5 Schema / export | checked (unit + live API + UI) | Sliders 1–10; paged meta + full decrypt report |
 | C Goals / memory / actions | checked (unit + live API + UI) | Encrypted goal / proposed→accepted memory / action on `/insights/life` |
 | D Chat modes | checked (unit + UI) | Record / Analyze / Review chips; due reminder on Today open |
+| E Save / queue / life cycle | checked (unit + live API + UI + scenario) | SaveScope, selective ack, CAS, tombstones, synthetic runAgent, full export |
 
 ## Environment (this session)
 
@@ -105,7 +106,7 @@ Cursor browser (`qa_ui_0919`, `http://127.0.0.1:5173/`):
 - Analytics: empty joint = «Мало совместных наблюдений…»; after one mood point `среднее · n=1 · дней 1/30 (3%)`.
 - Export: metadata `0` pages; full report `записей 0 · чат 0 · ошибок расшифровки 0` (before the check-in).
 - Life: goal decrypts, memory proposed→accepted, action + feedback chips.
-- Today: chips Записать / Разобрать / Обзор; due banner «Есть 1 действие(й) к обсуждению…» after `review_at` is due. `QueryClient` `staleTime: 60s` can hide a just-updated due list until remount/reload.
+- Today: chips Записать / Разобрать / Обзор; due banner «Есть 1 действие(й) к обсуждению…» after `review_at` is due. Life query is now `staleTime: 0` + `refetchOnMount: "always"`.
 
 Not run: OpenRouter/Ollama, `docker compose` backend/frontend with bind mounts, Undo click in the browser.
 
@@ -115,8 +116,67 @@ Not run: OpenRouter/Ollama, `docker compose` backend/frontend with bind mounts, 
 - Charts under `today` policy still use the 7d open-metrics API enum (no 1-day period).
 - Old LLM settings row `id=default` is not auto-attached; re-save agent settings per account.
 - OpenRouter/Ollama were not called; D tool allowlists stay unit-covered.
-- Due reminder on Today uses the cached `["life"]` query; a due change made outside that query is visible on the next fresh fetch (reload / 60s).
+- Due reminder on Today uses merged `review_at` + nearest timer + life query `staleTime: 0` / `refetchOnMount: "always"`. The old 60s hide is closed.
+- Account switch mid-encrypt and lost-ack retry are unit-covered, not replayed as a second-account UI dance.
+- Full export in this browser run had one diary page (one thought). Multi-page merge is unit-covered.
+
+## Iteration E — save, queue, goals cycle (2026-09-19)
+
+No new npm deps. No Alembic. Columns `version` / `deleted_at` / `review_at` / `state` already existed. Memory dispute uses `disputed`.
+
+### Волна 1 — SaveScope, очередь, CAS, tombstones, Life merge
+
+| Пункт | Статус |
+|---|---|
+| Красные тесты: смена аккаунта во время encrypt; ack rev1 при локальном rev2 | проверено тестом |
+| `captureSaveScope()` до первого await; запись остаётся у A | проверено тестом |
+| Устаревшие load / decrypt / `runAgent` не пишут UI нового аккаунта (`sessionId`) | реализовано |
+| `local_rev` / `inflight_rev` / выборочный ack / mutex flush | проверено тестом |
+| Честные статусы pending / error / conflict / rejected; merge очереди в Life | проверено тестом + проверено в браузере |
+| Полный life fingerprint (`review_at`, канонические ids); смена только `review_at` ≠ duplicate | проверено тестом |
+| SQL CAS `UPDATE … WHERE id=? AND version=?`; нет version на существующей строке → conflict | проверено тестом (unit + live API) |
+| Entry matching version + другой ciphertext → `updated`; stale → conflict | проверено тестом (unit + live API) |
+| Идемпотентный повтор того же fingerprint → `duplicate` | проверено тестом |
+| Явные tombstones `GET /api/entries/tombstones` и `/api/life/tombstones`; клиент удаляет только эти id | проверено тестом (live API) |
+| Новая цель видна сразу offline («на устройстве») и после sync («на сервере») | проверено в браузере |
+
+Frontend: `npx tsc --noEmit`, 57 tests. Backend unit: `test_sync_contract` + `test_life_sync`. Live: `LIFELOG_LIVE_API=1` `test_sync_api_live` + `test_life_live`.
+
+### Волна 2 — агент, цикл памяти/действий, обзор, сон
+
+| Пункт | Статус |
+|---|---|
+| `assembleAllowedPersonalContext` + typed ids; plaintext только при `decrypt_n` | проверено тестом |
+| Synthetic `completeChat` через реальный `runAgent` (DEV Settings, без обхода auth) | проверено тестом + проверено в браузере |
+| accepted memory в payload; disputed/stale нет в актуальном профиле | проверено тестом; disputed в браузере после «Оспорить» |
+| `propose_action` на существующую цель | проверено тестом + проверено в браузере |
+| Память: правка / оспорить / устарело / удалить; действие по названию цели + `review_at` | проверено в браузере |
+| Feedback: пробовал / что изменилось / сложность / побочки / continue\|complete\|stop | проверено в браузере |
+| Due без poll (`review_at` + таймер ближайшего + refetch on mount) | проверено в браузере |
+| `CipherCard` отменяет устаревший decrypt при смене kek/ciphertext/session | реализовано |
+| Обзор периода 1д / 7д / envelope; отсутствие дня ≠ неудача; hypothesized пустой | проверено тестом + проверено в браузере |
+| Сон: дата пробуждения; timestamp = wake в поясе аккаунта | проверено тестом; поле «Дата пробуждения» проверено в браузере |
+
+### Волна 3 — экспорт и приёмка
+
+| Пункт | Статус |
+|---|---|
+| Полный снимок: server∪local entries, goals/memory/actions/feedback + plaintext, версии, чат, очередь, decrypt report | проверено тестом + проверено в браузере |
+| Сценарий на synthetic (реальный `runAgent`): цель → мысль → память → принять → действие на цель → принять с `review_at` → due → feedback complete → обзор 7д → оспорить память → offline save+sync → полный экспорт | проверен полный сценарий (`qa_wave_0919`) |
+| Смена аккаунта во время encrypt | проверено тестом; в браузере остаётся непроверенным |
+| Повтор после потери ack (rev2 остаётся pending) | проверено тестом; в браузере остаётся непроверенным |
+
+Browser (`http://127.0.0.1:5173/`, synthetic + `decrypt_n`, `Europe/Kiev`):
+
+- Цель «Лечь раньше» → «на сервере»; select показывает название, не `id.slice(0,8)`.
+- Analyze: `propose_memory` «Вечерние записи…» → Принять → `propose_action` «Лечь до 23:30…» с `review_at`.
+- `review_at` сдвинут на 2026-09-18 → Today: «Есть 1 действие(й) к обсуждению…».
+- Feedback заполнен → Завершить → «помогло»; due пропадает.
+- Review 7 дней: «Recorded: … action results. A missing day is not a failure. Hypothesized: none.»
+- Память → disputed.
+- Offline: «Офлайн цель» / «на устройстве» / шапка «офлайн»; после `online` → «на сервере».
+- Экспорт: записей 1 · чат 8 · ошибок 0; цели «Лечь раньше» + «Офлайн цель»; memory disputed; action completed; feedback `tried_helped`.
 
 ## Next
 
-Plan A–D is implemented and UI-checked on this host stack. Optional: Docker file sharing for bind mounts, real LLM keys, undo click, `refetchOnMount: "always"` for Today life.
+Iteration E is implemented and scenario-checked on this host stack. Optional: Docker file sharing for bind mounts, real LLM keys, undo click in the browser, second-account mid-encrypt UI.

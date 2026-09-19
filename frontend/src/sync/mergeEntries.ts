@@ -4,10 +4,12 @@ export interface LocalEntryRow {
   id: string;
   owner_user_id?: string;
   status: LocalQueueStatus;
+  version?: number | null;
 }
 
 export interface Mergeable {
   id: string;
+  version?: number | null;
 }
 
 export type MergedSource = "server" | "pending" | "error" | "rejected" | "conflict";
@@ -42,6 +44,13 @@ export function mergeEntryStreams<L extends LocalEntryRow, S extends Mergeable>(
     const loc = localById.get(row.id);
     if (loc && loc.status !== "synced") {
       byId.set(row.id, { id: row.id, source: sourceOf(loc.status), local: loc, server: row });
+    } else if (
+      loc &&
+      typeof loc.version === "number" &&
+      typeof row.version === "number" &&
+      row.version < loc.version
+    ) {
+      byId.set(row.id, { id: row.id, source: "server", local: loc });
     } else {
       byId.set(row.id, { id: row.id, source: "server", local: loc, server: row });
     }

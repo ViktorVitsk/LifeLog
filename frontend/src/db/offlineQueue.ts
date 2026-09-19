@@ -21,6 +21,8 @@ export interface PendingEntry extends EntrySyncPayload {
   local_rev?: number;
   inflight_rev?: number;
   conflict_version?: number;
+  created_at?: string;
+  cached_at?: string;
 }
 
 export interface StoredChatTurn {
@@ -145,16 +147,19 @@ export function resolveWriteOwner(scope?: SaveScope): string {
 }
 
 export function nextEntryEnqueue(existing: PendingEntry | undefined, payload: EntrySyncPayload, owner: string): PendingEntry {
+  const edited = Date.now();
   return {
     ...payload,
     owner_user_id: owner,
     status: payload.deleted ? "pending_delete" : "pending",
-    queued_at: Date.now(),
+    queued_at: edited,
     attempts: existing?.attempts ?? 0,
     local_rev: (existing?.local_rev ?? 0) + 1,
     inflight_rev: existing?.inflight_rev,
     version: existing?.version ?? payload.version,
     conflict_version: existing?.conflict_version,
+    created_at: existing?.created_at ?? new Date(edited).toISOString(),
+    cached_at: existing?.cached_at,
   };
 }
 
@@ -514,6 +519,14 @@ export async function deleteOrphanEntries(ids: string[]): Promise<void> {
 export async function persistServerEntries(items: EntryRead[], owner: string): Promise<void> {
   const upsert = (existing: PendingEntry | undefined, item: EntryRead): PendingEntry | undefined => {
     if (existing && existing.status !== "synced") return existing;
+    if (
+      existing &&
+      typeof existing.version === "number" &&
+      typeof item.version === "number" &&
+      item.version < existing.version
+    ) {
+      return existing;
+    }
     return {
       ...item,
       owner_user_id: owner,
@@ -522,6 +535,8 @@ export async function persistServerEntries(items: EntryRead[], owner: string): P
       attempts: 0,
       local_rev: existing?.local_rev ?? 0,
       version: item.version ?? existing?.version ?? undefined,
+      created_at: existing?.created_at ?? item.created_at,
+      cached_at: new Date().toISOString(),
     };
   };
   const test = getTestQueue();
@@ -541,18 +556,29 @@ export async function persistServerEntries(items: EntryRead[], owner: string): P
 }
 
 /** Drop only explicit tombstone ids. A missing list-page id never deletes a local copy. */
-export async function applyEntryTombstones(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const droppable = (row: PendingEntry | undefined) =>
-    Boolean(row && (row.status === "synced" || row.status === "pending_delete"));
+export async function applyEntryTombstones(
+  items: { id: string; version?: number }[],
+  owner: string,
+): Promise<void> {
+  if (items.length === 0) return;
+  const droppable = (row: PendingEntry | undefined, tombVersion?: number) => {
+    if (!row || row.owner_user_id !== owner) return false;
+    if (row.status === "pending" || row.status === "error" || row.status === "conflict") return false;
+    if (typeof tombVersion === "number" && typeof row.version === "number" && tombVersion < row.version) return false;
+    return row.status === "synced" || row.status === "pending_delete";
+  };
   const test = getTestQueue();
   if (test) {
-    for (const id of ids) {
-      const row = test.entries.get(id);
-      if (droppable(row)) test.entries.delete(id);
+    for (const item of items) {
+      const row = test.entries.get(item.id);
+      if (droppable(row, item.version)) test.entries.delete(item.id);
     }
     return;
   }
-  const rows = await db.entries.bulkGet(ids);
-  await db.entries.bulkDelete(rows.filter((row): row is PendingEntry => droppable(row)).map((row) => row.id));
+  await db.transaction("rw", db.entries, async () => {
+    for (const item of items) {
+      const row = await db.entries.get(item.id);
+      if (droppable(row, item.version)) await db.entries.delete(item.id);
+    }
+  });
 }

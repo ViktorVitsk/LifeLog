@@ -33,7 +33,7 @@ function normalizeLocal(p: PendingEntry): MergedEntry {
           : "pending";
   return {
     ...p,
-    created_at: new Date(p.queued_at).toISOString(),
+    created_at: p.created_at || "",
     synced_from_offline: false,
     _source: source,
   };
@@ -68,7 +68,7 @@ export function useEntries() {
         rows.push({ ...item.server, _source: "server" });
         continue;
       }
-      if (item.local) rows.push(normalizeLocal(item.local));
+      if (item.local) rows.push({ ...normalizeLocal(item.local), _source: "server" });
     }
     return rows.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
   }, [serverQuery.data, local, userId]);

@@ -46,6 +46,23 @@ describe("life queue local revision", () => {
     assert.equal(afterSecond.server_version, 2);
   });
 
+  it("keeps the first local created_at when the same feedback is edited later", () => {
+    const first = nextLifeEnqueue(
+      undefined,
+      "feedback",
+      { id: "f1", action_id: "a1", outcome_kind: "unevaluated", created_at: "2026-08-03T09:00:00.000Z" },
+      "user-a",
+    );
+    const second = nextLifeEnqueue(
+      first,
+      "feedback",
+      { id: "f1", action_id: "a1", outcome_kind: "tried_no_effect" },
+      "user-a",
+    );
+    assert.equal(second.payload.created_at, "2026-08-03T09:00:00.000Z");
+    assert.notEqual(second.payload.updated_at, "2026-08-03T09:00:00.000Z");
+  });
+
   it("acks matching rev and records server version", () => {
     const row: PendingLife = nextLifeEnqueue(
       undefined,

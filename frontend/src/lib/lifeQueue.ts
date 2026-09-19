@@ -1,4 +1,5 @@
 import { captureSaveScope, type SaveScope } from "./accountScope.ts";
+import { firstKnownIso, isStaleVersion, knownIso, nowIso } from "./cacheFreshness.ts";
 import { encryptEntry } from "./crypto.ts";
 import { db, type LifeKind, type PendingLife } from "../db/offlineQueue.ts";
 import { getTestQueue } from "../db/testQueue.ts";
@@ -11,13 +12,20 @@ export function nextLifeEnqueue(
   payload: Record<string, unknown>,
   owner: string,
 ): PendingLife {
+  const edited = Date.now();
+  const created = firstKnownIso(existing?.payload.created_at, payload.created_at) ?? nowIso(edited);
   return {
     id: String(payload.id),
     kind,
-    payload,
+    payload: {
+      ...payload,
+      created_at: created,
+      updated_at: knownIso(payload.updated_at) ?? nowIso(edited),
+      cached_at: existing?.payload.cached_at,
+    },
     status: payload.deleted ? "pending_delete" : "pending",
     owner_user_id: owner,
-    queued_at: Date.now(),
+    queued_at: edited,
     local_rev: (existing?.local_rev ?? 0) + 1,
     inflight_rev: existing?.inflight_rev,
     server_version: existing?.server_version,
@@ -220,20 +228,31 @@ export function lifeSyncPayload(row: PendingLife): Record<string, unknown> {
   };
 }
 
-export async function applyLifeTombstones(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const droppable = (row: PendingLife | undefined) =>
-    Boolean(row && (row.status === "synced" || row.status === "pending_delete"));
+export async function applyLifeTombstones(
+  items: { id: string; version?: number }[],
+  owner: string,
+): Promise<void> {
+  if (items.length === 0) return;
+  const droppable = (row: PendingLife | undefined, tombVersion?: number) => {
+    if (!row || row.owner_user_id !== owner) return false;
+    if (row.status === "pending" || row.status === "error" || row.status === "conflict") return false;
+    if (isStaleVersion(tombVersion, row.server_version)) return false;
+    return row.status === "synced" || row.status === "pending_delete";
+  };
   const test = getTestQueue();
   if (test) {
-    for (const id of ids) {
-      const row = test.life.get(id);
-      if (droppable(row)) test.life.delete(id);
+    for (const item of items) {
+      const row = test.life.get(item.id);
+      if (droppable(row, item.version)) test.life.delete(item.id);
     }
     return;
   }
-  const rows = await db.life_queue.bulkGet(ids);
-  await db.life_queue.bulkDelete(rows.filter((row): row is PendingLife => droppable(row)).map((row) => row.id));
+  await db.transaction("rw", db.life_queue, async () => {
+    for (const item of items) {
+      const row = await db.life_queue.get(item.id);
+      if (droppable(row, item.version)) await db.life_queue.delete(item.id);
+    }
+  });
 }
 
 function entityPayload(kind: LifeKind, item: LifeGoalRead | LifeMemoryRead | LifeActionRead | LifeFeedbackRead): Record<string, unknown> {
@@ -242,6 +261,9 @@ function entityPayload(kind: LifeKind, item: LifeGoalRead | LifeMemoryRead | Lif
     encrypted_dek: item.encrypted_dek,
     encrypted_content: item.encrypted_content,
     version: item.version,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+    cached_at: nowIso(),
   };
   if (kind === "goal") {
     const g = item as LifeGoalRead;
@@ -289,10 +311,19 @@ export async function persistServerLife(bundle: LifeBundle, owner: string): Prom
     ["feedback", bundle.feedback],
   ];
   const upsert = (existing: PendingLife | undefined, kind: LifeKind, item: LifeGoalRead | LifeMemoryRead | LifeActionRead | LifeFeedbackRead): PendingLife => {
+    if (existing && isStaleVersion(item.version, existing.server_version)) return existing;
     const payload = entityPayload(kind, item);
     if (!existing) return asCacheRow(kind, item, owner);
     if (existing.status === "synced") {
-      return { ...existing, payload, server_version: item.version, last_error: undefined };
+      return {
+        ...existing,
+        payload: {
+          ...payload,
+          created_at: firstKnownIso(existing.payload.created_at, item.created_at) ?? payload.created_at,
+        },
+        server_version: item.version,
+        last_error: undefined,
+      };
     }
     if (existing.status === "pending_delete") return existing;
     return { ...existing, server_snapshot: payload, conflict_version: item.version ?? existing.conflict_version };

@@ -102,6 +102,50 @@ describe("merge life queue", () => {
     assert.equal(merged.goals.length, 1);
     assert.equal(merged.goals[0].encrypted_content, "new");
   });
+
+  it("does not let a stale React Query bundle beat a newer local cache", () => {
+    const cached: PendingLife = {
+      id: "a1",
+      kind: "action",
+      payload: {
+        goal_id: "g1",
+        state: "accepted",
+        encrypted_content: "v8",
+        encrypted_dek: "d",
+        created_at: "2026-08-02T10:00:00.000Z",
+        updated_at: "2026-09-01T00:00:00.000Z",
+        version: 8,
+      },
+      status: "synced",
+      owner_user_id: "u1",
+      queued_at: Date.parse("2026-09-19T12:00:00.000Z"),
+      server_version: 8,
+    };
+    const merged = mergeLifeBundle(
+      {
+        goals: [],
+        memory: [],
+        actions: [
+          {
+            id: "a1",
+            goal_id: "g1",
+            state: "accepted",
+            encrypted_content: "v7",
+            encrypted_dek: "d",
+            created_at: "2026-09-19T12:00:00.000Z",
+            updated_at: "2026-09-19T12:00:00.000Z",
+            version: 7,
+          },
+        ],
+        feedback: [],
+        due_action_ids: [],
+      },
+      [cached],
+      "u1",
+    );
+    assert.equal(merged.actions[0].encrypted_content, "v8");
+    assert.equal(merged.actions[0].created_at, "2026-08-02T10:00:00.000Z");
+  });
 });
 
 describe("due actions", () => {

@@ -18,10 +18,10 @@ export interface SyncResult {
   error?: string;
 }
 
-export async function pullRemoteDeletes(token: string): Promise<void> {
+export async function pullRemoteDeletes(token: string, owner: string): Promise<void> {
   try {
     const tombs = await api.getEntryTombstones(token);
-    await applyEntryTombstones((tombs.items ?? []).map((item) => item.id));
+    await applyEntryTombstones(tombs.items ?? [], owner);
   } catch {
     /* keep local rows unless an explicit tombstone arrives */
   }
@@ -65,7 +65,7 @@ async function runSyncOnceUnlocked(token: string, userId?: string): Promise<Sync
 
   const snapshots = await claimPendingEntries(100, userId);
   if (snapshots.length === 0) {
-    await pullRemoteDeletes(token);
+    if (userId) await pullRemoteDeletes(token, userId);
     return { attempted: 0, saved: 0, failed: 0 };
   }
 
@@ -75,7 +75,7 @@ async function runSyncOnceUnlocked(token: string, userId?: string): Promise<Sync
       token,
     );
     const counts = await applySnapshots(snapshots, resp.results ?? []);
-    await pullRemoteDeletes(token);
+    if (userId) await pullRemoteDeletes(token, userId);
     return {
       attempted: snapshots.length,
       saved: counts.saved,
@@ -126,7 +126,7 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
       const lifeSaved = await flushLifeQueue(token, userId).catch(() => 0);
       try {
         const tombs = await api.getLifeTombstones(token);
-        await applyLifeTombstones((tombs.items ?? []).map((item) => item.id));
+        await applyLifeTombstones(tombs.items ?? [], userId);
       } catch {
         /* keep local life rows unless an explicit tombstone arrives */
       }

@@ -1,6 +1,14 @@
 import type { LifeBundle, LifeActionRead, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "./api.ts";
 import type { PendingLife } from "../db/offlineQueue.ts";
+import { knownIso, isStaleVersion, versionNumber } from "./cacheFreshness.ts";
 import { now } from "./clock.ts";
+
+function rowDates(row: PendingLife): { created_at: string; updated_at: string } {
+  return {
+    created_at: knownIso(row.payload.created_at) ?? "",
+    updated_at: knownIso(row.payload.updated_at) ?? "",
+  };
+}
 
 function asGoal(row: PendingLife): LifeGoalRead {
   const p = row.payload;
@@ -14,8 +22,7 @@ function asGoal(row: PendingLife): LifeGoalRead {
     encrypted_dek: String(p.encrypted_dek ?? ""),
     encrypted_content: String(p.encrypted_content ?? ""),
     version: row.server_version ?? (p.version as number | undefined),
-    created_at: new Date(row.queued_at).toISOString(),
-    updated_at: new Date(row.queued_at).toISOString(),
+    ...rowDates(row),
   };
 }
 
@@ -31,8 +38,7 @@ function asMemory(row: PendingLife): LifeMemoryRead {
     encrypted_dek: String(p.encrypted_dek ?? ""),
     encrypted_content: String(p.encrypted_content ?? ""),
     version: row.server_version ?? (p.version as number | undefined),
-    created_at: new Date(row.queued_at).toISOString(),
-    updated_at: new Date(row.queued_at).toISOString(),
+    ...rowDates(row),
   };
 }
 
@@ -49,8 +55,7 @@ function asAction(row: PendingLife): LifeActionRead {
     encrypted_dek: String(p.encrypted_dek ?? ""),
     encrypted_content: String(p.encrypted_content ?? ""),
     version: row.server_version ?? (p.version as number | undefined),
-    created_at: new Date(row.queued_at).toISOString(),
-    updated_at: new Date(row.queued_at).toISOString(),
+    ...rowDates(row),
   };
 }
 
@@ -63,8 +68,7 @@ function asFeedback(row: PendingLife): LifeFeedbackRead {
     encrypted_dek: String(p.encrypted_dek ?? ""),
     encrypted_content: String(p.encrypted_content ?? ""),
     version: row.server_version ?? (p.version as number | undefined),
-    created_at: new Date(row.queued_at).toISOString(),
-    updated_at: new Date(row.queued_at).toISOString(),
+    ...rowDates(row),
   };
 }
 
@@ -99,11 +103,17 @@ export function mergeLifeBundle(
     if (row.kind === "feedback") feedback.set(row.id, asFeedback(row));
   }
 
+  function putIfFresh<T extends { id: string; version?: number | null }>(map: Map<string, T>, item: T) {
+    const held = map.get(item.id);
+    if (held && isStaleVersion(item.version, versionNumber(held.version))) return;
+    map.set(item.id, item);
+  }
+
   if (server) {
-    for (const g of server.goals) if (!hidden.has(g.id)) goals.set(g.id, g);
-    for (const m of server.memory) if (!hidden.has(m.id)) memory.set(m.id, m);
-    for (const a of server.actions) if (!hidden.has(a.id)) actions.set(a.id, a);
-    for (const f of server.feedback) if (!hidden.has(f.id)) feedback.set(f.id, f);
+    for (const g of server.goals) if (!hidden.has(g.id)) putIfFresh(goals, g);
+    for (const m of server.memory) if (!hidden.has(m.id)) putIfFresh(memory, m);
+    for (const a of server.actions) if (!hidden.has(a.id)) putIfFresh(actions, a);
+    for (const f of server.feedback) if (!hidden.has(f.id)) putIfFresh(feedback, f);
   }
 
   for (const row of overlay) {

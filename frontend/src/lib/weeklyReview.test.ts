@@ -104,7 +104,7 @@ describe("weekly review", () => {
     assert.equal(review.current.feedback[0].recorded_at?.startsWith("2026-09-17"), true);
     assert.equal(review.current.feedback[0].observed_on, "2026-09-17");
     assert.equal(review.current.actions[0].proposal, "Lights out at 23:00");
-    assert.ok(review.current.notes.includes("older_feedback_excluded"));
+    assert.equal(review.current.late_feedback.length, 0);
     assert.equal(review.comparison.helped_is_not_proof, true);
     const mood = review.current.metrics.find((m) => m.key === "mood_score");
     assert.equal(mood?.n, 2);

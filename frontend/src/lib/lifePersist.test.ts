@@ -96,4 +96,69 @@ describe("life cache and conflict resolve", () => {
     assert.equal(store.life.get("g1")?.status, "pending");
     assert.equal(store.life.get("g1")?.server_version, 5);
   });
+
+  it("keeps an August created_at after a September cache write", async () => {
+    const store = installTestQueue();
+    await persistServerLife(
+      {
+        goals: [],
+        memory: [],
+        actions: [
+          {
+            id: "a-aug",
+            goal_id: "g1",
+            state: "accepted",
+            encrypted_dek: "d",
+            encrypted_content: "plan",
+            created_at: "2026-08-02T10:00:00.000Z",
+            updated_at: "2026-08-02T10:00:00.000Z",
+            version: 1,
+          },
+        ],
+        feedback: [],
+        due_action_ids: [],
+      },
+      "u1",
+    );
+    const merged = mergeLifeBundle(undefined, [...store.life.values()], "u1");
+    assert.equal(merged.actions[0].created_at, "2026-08-02T10:00:00.000Z");
+  });
+
+  it("does not apply a delayed version 7 over a cached version 8", async () => {
+    const store = installTestQueue();
+    const base = {
+      goals: [
+        {
+          id: "g1",
+          state: "active",
+          encrypted_dek: "d",
+          encrypted_content: "v8",
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-09-01T00:00:00.000Z",
+          version: 8,
+        },
+      ],
+      memory: [],
+      actions: [],
+      feedback: [],
+      due_action_ids: [],
+    };
+    await persistServerLife(base, "u1");
+    await persistServerLife(
+      {
+        ...base,
+        goals: [{ ...base.goals[0], encrypted_content: "v7", updated_at: "2026-08-20T00:00:00.000Z", version: 7 }],
+      },
+      "u1",
+    );
+    assert.equal(store.life.get("g1")?.server_version, 8);
+    assert.equal(store.life.get("g1")?.payload.encrypted_content, "v8");
+    const staleServer = {
+      ...base,
+      goals: [{ ...base.goals[0], encrypted_content: "v7", version: 7 }],
+    };
+    const merged = mergeLifeBundle(staleServer, [...store.life.values()], "u1");
+    assert.equal(merged.goals[0].encrypted_content, "v8");
+    assert.equal(merged.goals[0].version, 8);
+  });
 });

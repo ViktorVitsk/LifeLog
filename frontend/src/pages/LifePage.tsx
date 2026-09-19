@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import CipherCard, { useDecryptedMap } from "../components/CipherCard";
 import WeeklyReviewCard from "../components/WeeklyReviewCard";
@@ -12,8 +12,8 @@ import { useMergedLife } from "../hooks/useMergedLife";
 import type { LifeActionRead, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
 import { resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
-import { ActionChangedError, commitFeedbackDecision, listLifeOps, resumeFeedbackOps } from "../lib/lifeOp";
-import { USER_OUTCOMES, ACTION_DECISIONS, outcomeSourceOf, type ActionDecision, type UserOutcome } from "../lib/feedbackOutcome";
+import { ActionChangedError, commitFeedbackCorrection, commitFeedbackDecision, listLifeOps, resumeFeedbackOps } from "../lib/lifeOp";
+import { actionPatchForDecision, USER_OUTCOMES, ACTION_DECISIONS, outcomeSourceOf, type ActionDecision, type UserOutcome } from "../lib/feedbackOutcome";
 import { queueSyncLabel } from "../lib/mergeLife";
 import type { SaveScope } from "../lib/accountScope";
 import type { TStrings } from "../i18n/strings";
@@ -296,35 +296,50 @@ export default function LifePage() {
     outcome: string,
     decision: string,
     fields: { what_changed: string; difficulty: string; side_effects: string; observed_on: string; plan_text: string },
+    submissionId: string,
     existing?: LifeFeedbackRead,
-  ) {
-    if (!kek) return;
+  ): Promise<boolean> {
+    if (!kek) return false;
     if (!outcome) {
       setMsg(t.lifeNeedOutcome);
-      return;
+      return false;
     }
-    if (!decision) {
+    if (!existing && !decision) {
       setMsg(t.lifeNeedDecision);
-      return;
+      return false;
     }
     if (!fields.what_changed.trim() && !fields.difficulty.trim() && !fields.side_effects.trim()) {
       setMsg(t.reviewFields);
-      return;
+      return false;
     }
     try {
-      await commitFeedbackDecision({
-        kek,
-        action,
-        outcome,
-        decision,
-        fields,
-        existingFeedback: existing,
-        planSnapshot: typeof actionPlain[action.id]?.chosen_try === "string"
-          ? String(actionPlain[action.id].chosen_try)
-          : typeof actionPlain[action.id]?.proposal === "string"
-            ? String(actionPlain[action.id].proposal)
-            : null,
-      });
+      if (existing) {
+        const plain = feedbackPlain[existing.id] ?? {};
+        await commitFeedbackCorrection({
+          kek,
+          action,
+          outcome,
+          fields,
+          submissionId,
+          existingFeedback: existing,
+          existingPlain: plain,
+          planSnapshot: typeof plain.plan_snapshot === "string" ? String(plain.plan_snapshot) : null,
+        });
+      } else {
+        await commitFeedbackDecision({
+          kek,
+          action,
+          outcome,
+          decision,
+          fields,
+          submissionId,
+          planSnapshot: typeof actionPlain[action.id]?.chosen_try === "string"
+            ? String(actionPlain[action.id].chosen_try)
+            : typeof actionPlain[action.id]?.proposal === "string"
+              ? String(actionPlain[action.id].proposal)
+              : null,
+        });
+      }
       if (token && userId && (typeof navigator === "undefined" || navigator.onLine)) {
         await flushLifeQueue(token, userId).catch(() => undefined);
         await resumeFeedbackOps(userId);
@@ -333,12 +348,19 @@ export default function LifePage() {
       trigger();
       await refreshOps();
       setMsg(t.lifeFeedbackSaved);
+      return true;
     } catch (e) {
       if (e instanceof ActionChangedError) setMsg(t.lifeActionRemoteChanged);
       else if ((e as Error).message === "outcome_required") setMsg(t.lifeNeedOutcome);
       else if ((e as Error).message === "decision_required") setMsg(t.lifeNeedDecision);
       else setMsg((e as Error).message);
+      return false;
     }
+  }
+
+  async function onActionDecision(action: LifeActionRead, decision: ActionDecision) {
+    await writeAction(action, actionPatchForDecision(decision, action.state));
+    setMsg(t.lifeActionSaved);
   }
 
   async function onChangePlan(action: LifeActionRead, text: string) {
@@ -481,7 +503,10 @@ export default function LifePage() {
             extra={conflictPanel(a.id)}
             onReviewAt={(iso) => void writeAction(a, { review_at: iso })}
             onChangePlan={(text) => void onChangePlan(a, text)}
-            onFeedback={(outcome, decision, fields, existing) => void onFeedback(a, outcome, decision, fields, existing)}
+            onActionDecision={(decision) => void onActionDecision(a, decision)}
+            onFeedback={(outcome, decision, fields, submissionId, existing) =>
+              onFeedback(a, outcome, decision, fields, submissionId, existing)
+            }
           />
         ))}
       </section>
@@ -580,6 +605,7 @@ function ActionRow({
   focusResult,
   onReviewAt,
   onChangePlan,
+  onActionDecision,
   onFeedback,
 }: {
   action: LifeActionRead;
@@ -596,12 +622,14 @@ function ActionRow({
   op?: LifeOp;
   onReviewAt: (iso: string) => void;
   onChangePlan: (text: string) => void;
+  onActionDecision: (decision: ActionDecision) => void;
   onFeedback: (
     outcome: string,
     decision: string,
     fields: { what_changed: string; difficulty: string; side_effects: string; observed_on: string; plan_text: string },
+    submissionId: string,
     existing?: LifeFeedbackRead,
-  ) => void;
+  ) => Promise<boolean>;
 }) {
   const [outcome, setOutcome] = useState<UserOutcome | "">("");
   const [decision, setDecision] = useState<ActionDecision | "">("");
@@ -611,12 +639,14 @@ function ActionRow({
   const [observed, setObserved] = useState("");
   const [plan, setPlan] = useState("");
   const [editing, setEditing] = useState<LifeFeedbackRead | undefined>();
+  const [busy, setBusy] = useState(false);
+  const submissionRef = useRef<string | undefined>(undefined);
   const fields = { what_changed: what, difficulty, side_effects: side, observed_on: observed, plan_text: plan };
   const started = action.period_start ?? action.created_at;
   const opLabel =
     op?.status === "done"
       ? t.lifeOpSynced
-      : op?.status === "feedback_acked" || op?.status === "action_conflict"
+      : op?.status === "feedback_acked" || op?.status === "action_acked" || op?.status === "action_conflict"
         ? t.lifeOpPartial
         : op
           ? t.lifeOpOnDevice
@@ -730,21 +760,34 @@ function ActionRow({
             ))}
           </select>
         </label>
-        <label className="block text-[11px] text-zinc-400">
-          {t.lifeDecision}
-          <select
-            className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
-            value={decision}
-            onChange={(e) => setDecision(e.target.value as ActionDecision | "")}
-          >
-            <option value="">{t.lifeDecision}</option>
-            {ACTION_DECISIONS.map((item) => (
-              <option key={item} value={item}>
-                {decisionLabel(item, t)}
-              </option>
-            ))}
-          </select>
-        </label>
+        {!editing && (
+          <label className="block text-[11px] text-zinc-400">
+            {t.lifeDecision}
+            <select
+              className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
+              value={decision}
+              onChange={(e) => setDecision(e.target.value as ActionDecision | "")}
+            >
+              <option value="">{t.lifeDecision}</option>
+              {ACTION_DECISIONS.map((item) => (
+                <option key={item} value={item}>
+                  {decisionLabel(item, t)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <div className="flex flex-wrap gap-1">
+          <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onActionDecision("continue")}>
+            {t.lifeResume}
+          </button>
+          <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onActionDecision("complete")}>
+            {t.lifeComplete}
+          </button>
+          <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onActionDecision("stop")}>
+            {t.lifeStop}
+          </button>
+        </div>
         <label className="block text-[11px] text-zinc-400">
           {t.lifeObservedOn}
           <input
@@ -759,13 +802,32 @@ function ActionRow({
         <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeSideEffects} value={side} onChange={(e) => setSide(e.target.value)} />
         <button
           type="button"
-          className="text-[11px] px-2 py-1 rounded bg-indigo-600"
+          className="text-[11px] px-2 py-1 rounded bg-indigo-600 disabled:opacity-60"
+          disabled={busy}
           onClick={() => {
-            onFeedback(outcome, decision, fields, editing);
-            setEditing(undefined);
+            void (async () => {
+              if (busy) return;
+              const submissionId = submissionRef.current ?? crypto.randomUUID();
+              submissionRef.current = submissionId;
+              setBusy(true);
+              try {
+                const ok = await onFeedback(outcome, decision, fields, submissionId, editing);
+                if (ok) {
+                  setEditing(undefined);
+                  setOutcome("");
+                  setDecision("");
+                  setWhat("");
+                  setDifficulty("");
+                  setSide("");
+                  submissionRef.current = undefined;
+                }
+              } finally {
+                setBusy(false);
+              }
+            })();
           }}
         >
-          {editing ? t.lifeCorrectOutcome : t.lifeSaveResult}
+          {busy ? t.lifeSaving : editing ? t.lifeCorrectOutcome : t.lifeSaveResult}
         </button>
       </div>
       {extra}

@@ -7,6 +7,7 @@ import {
 } from "../db/offlineQueue";
 import { api, isAuthError, isNetworkError } from "../lib/api";
 import { applyLifeTombstones, persistServerLife } from "../lib/lifeQueue";
+import { resumeFeedbackOps } from "../lib/lifeOp";
 import { flushLifeQueue } from "../lib/lifeStore";
 import { withSyncLock } from "../lib/syncLock.ts";
 
@@ -124,6 +125,7 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
     inFlight = (async () => {
       const r = await runSyncOnce(token, userId);
       const lifeSaved = await flushLifeQueue(token, userId).catch(() => 0);
+      await resumeFeedbackOps(userId);
       try {
         const tombs = await api.getLifeTombstones(token);
         await applyLifeTombstones(tombs.items ?? [], userId);

@@ -72,6 +72,7 @@ export function buildFeedbackPlain(input: {
   action_version?: number | null;
   plan_snapshot?: string | null;
   created_at?: string | null;
+  corrected_at?: string | null;
 }): Record<string, unknown> {
   return {
     outcome_kind: input.outcome,
@@ -87,6 +88,7 @@ export function buildFeedbackPlain(input: {
     action_id: input.action_id,
     action_version: input.action_version ?? null,
     plan_snapshot: input.plan_snapshot ?? null,
+    corrected_at: input.corrected_at ?? null,
   };
 }
 
@@ -102,11 +104,15 @@ export function actionPatchForDecision(
   return { state: keep, ...extra };
 }
 
+export function assertOutcome(outcome: string): UserOutcome {
+  if (!isUserOutcome(outcome)) throw new Error("outcome_required");
+  return outcome;
+}
+
 export function assertOutcomeAndDecision(outcome: string, decision: string): {
   outcome: UserOutcome;
   decision: ActionDecision;
 } {
-  if (!isUserOutcome(outcome)) throw new Error("outcome_required");
   if (!isActionDecision(decision)) throw new Error("decision_required");
-  return { outcome, decision };
+  return { outcome: assertOutcome(outcome), decision };
 }

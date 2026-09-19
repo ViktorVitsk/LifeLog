@@ -77,20 +77,32 @@ export interface PendingLife {
   server_snapshot?: Record<string, unknown>;
 }
 
-export type LifeOpStatus = "local" | "feedback_acked" | "done" | "action_conflict";
+export type LifeOpKind = "feedback_and_action" | "feedback_correction";
+export type LifeOpStatus =
+  | "local"
+  | "feedback_acked"
+  | "action_acked"
+  | "done"
+  | "action_conflict"
+  | "superseded";
 
 export interface LifeOp {
   id: string;
   owner_user_id: string;
   session_id: number;
-  kind: "feedback_and_action";
+  kind: LifeOpKind;
   status: LifeOpStatus;
+  submission_id: string;
   feedback_id: string;
   action_id: string;
   expected_action_version?: number | null;
-  intent_key: string;
-  feedback_payload: Record<string, unknown>;
-  action_payload: Record<string, unknown> | null;
+  expected_action_local_rev?: number | null;
+  feedback_local_rev?: number | null;
+  action_local_rev?: number | null;
+  feedback_acked?: boolean;
+  action_acked?: boolean;
+  feedback_payload?: Record<string, unknown> | null;
+  action_payload?: Record<string, unknown> | null;
   created_at: number;
 }
 
@@ -135,29 +147,105 @@ export class LifeLogDB extends Dexie {
     this.version(6).stores({
       life_ops: "id, owner_user_id, action_id, status",
     });
+    this.version(7)
+      .stores({
+        life_ops: "id, owner_user_id, action_id, status, submission_id",
+      })
+      .upgrade((tx) =>
+        tx
+          .table("life_ops")
+          .toCollection()
+          .modify((row) => {
+            const next = migrateLifeOpRow(row as Record<string, unknown>);
+            delete (row as { intent_key?: string }).intent_key;
+            (row as { submission_id?: string }).submission_id = String(next.submission_id ?? row.id);
+            if ((row as { kind?: string }).kind !== "feedback_correction") {
+              (row as { kind?: string }).kind = "feedback_and_action";
+            }
+          }),
+      );
   }
 }
 
 export const db = new LifeLogDB();
 
-let activeDb: LifeLogDB = db;
-
 export function getLifeDb(): LifeLogDB {
-  return activeDb;
+  return db;
 }
 
-/** Run production queue functions against a throwaway IndexedDB, then delete it. */
-export async function withIsolatedLifeDb<T>(fn: (iso: LifeLogDB) => Promise<T>): Promise<T> {
-  const name = `lifelog-iso-${crypto.randomUUID()}`;
-  const iso = new LifeLogDB(name);
-  const prev = activeDb;
-  activeDb = iso;
-  try {
-    return await fn(iso);
-  } finally {
-    activeDb = prev;
-    iso.close();
-    await Dexie.delete(name);
+export function resolveQueueAccess(store?: LifeLogDB): { test: ReturnType<typeof getTestQueue>; db: LifeLogDB | undefined } {
+  if (store) return { test: null, db: store };
+  const test = getTestQueue();
+  if (test) return { test, db: undefined };
+  return { test: null, db };
+}
+
+export function migrateLifeOpRow(row: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...row };
+  delete next.intent_key;
+  if (typeof next.submission_id !== "string" || !next.submission_id) {
+    next.submission_id = String(next.id ?? "");
+  }
+  if (next.kind !== "feedback_correction") next.kind = "feedback_and_action";
+  return next;
+}
+
+export function stripDoneOpPayloads(op: LifeOp): LifeOp {
+  if (op.status !== "done") return op;
+  return { ...op, feedback_payload: null, action_payload: null };
+}
+
+export function finalizeLifeOpStatus(op: LifeOp): LifeOp {
+  if (op.status === "superseded" || op.status === "action_conflict") return op;
+  let status: LifeOpStatus = "local";
+  if (op.feedback_acked && (op.action_local_rev == null || op.action_acked)) status = "done";
+  else if (op.feedback_acked) status = "feedback_acked";
+  else if (op.action_acked) status = "action_acked";
+  return stripDoneOpPayloads({ ...op, status });
+}
+
+export function applyOpEntityAck(
+  op: LifeOp,
+  entityId: string,
+  localRev: number,
+  result: { status: string },
+): LifeOp {
+  if (op.status === "done" || op.status === "superseded") return op;
+  const ok = result.status === "created" || result.status === "updated" || result.status === "duplicate";
+  const bad = result.status === "conflict" || result.status === "rejected";
+  const next = { ...op };
+  if (op.feedback_id === entityId && op.feedback_local_rev === localRev) {
+    if (ok) next.feedback_acked = true;
+    else if (bad) next.status = "action_conflict";
+  }
+  if (op.action_id === entityId && op.action_local_rev != null && op.action_local_rev === localRev) {
+    if (ok) next.action_acked = true;
+    else if (bad) next.status = "action_conflict";
+  }
+  return finalizeLifeOpStatus(next);
+}
+
+export async function ackLifeOpsForResult(
+  entityId: string,
+  localRev: number,
+  result: { status: string },
+  store?: LifeLogDB,
+): Promise<void> {
+  const { test, db: target } = resolveQueueAccess(store);
+  const rows = test ? [...test.ops.values()] : target ? await target.life_ops.toArray() : [];
+  for (const op of rows) {
+    const next = applyOpEntityAck(op, entityId, localRev, result);
+    if (
+      next.status === op.status &&
+      next.feedback_acked === op.feedback_acked &&
+      next.action_acked === op.action_acked &&
+      next.feedback_payload === op.feedback_payload &&
+      next.action_payload === op.action_payload
+    ) {
+      continue;
+    }
+    if (test) test.ops.set(next.id, next);
+    else if (target) await target.life_ops.put(next);
   }
 }
 
@@ -184,17 +272,17 @@ export function nextEntryEnqueue(existing: PendingEntry | undefined, payload: En
   };
 }
 
-export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope): Promise<void> {
+export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope, store?: LifeLogDB): Promise<void> {
   const owner = resolveWriteOwner(scope);
-  const test = getTestQueue();
+  const { test, db: target } = resolveQueueAccess(store);
   if (test) {
     test.entries.set(payload.id, nextEntryEnqueue(test.entries.get(payload.id), payload, owner));
     return;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
-    const existing = await store.entries.get(payload.id);
-    await store.entries.put(nextEntryEnqueue(existing, payload, owner));
+  if (!target) return;
+  await target.transaction("rw", target.entries, async () => {
+    const existing = await target.entries.get(payload.id);
+    await target.entries.put(nextEntryEnqueue(existing, payload, owner));
   });
 }
 
@@ -244,7 +332,7 @@ function toEntryPayload(row: PendingEntry): EntrySyncPayload {
   };
 }
 
-export async function claimPendingEntries(limit = 50, userId?: string): Promise<EntrySendSnapshot[]> {
+export async function claimPendingEntries(limit = 50, userId?: string, store?: LifeLogDB): Promise<EntrySendSnapshot[]> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return [];
   const snapshots: EntrySendSnapshot[] = [];
@@ -255,7 +343,7 @@ export async function claimPendingEntries(limit = 50, userId?: string): Promise<
     row.inflight_rev = local_rev;
     snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
   };
-  const test = getTestQueue();
+  const { test, db: target } = resolveQueueAccess(store);
   if (test) {
     const rows = [...test.entries.values()].sort((a, b) => a.queued_at - b.queued_at);
     for (const row of rows) {
@@ -264,9 +352,9 @@ export async function claimPendingEntries(limit = 50, userId?: string): Promise<
     }
     return snapshots;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
-    const rows = await store.entries
+  if (!target) return snapshots;
+  await target.transaction("rw", target.entries, async () => {
+    const rows = await target.entries
       .where("status")
       .anyOf(["pending", "error", "pending_delete"])
       .sortBy("queued_at");
@@ -275,7 +363,7 @@ export async function claimPendingEntries(limit = 50, userId?: string): Promise<
       if (row.owner_user_id !== owner) continue;
       const local_rev = row.local_rev ?? 1;
       row.inflight_rev = local_rev;
-      await store.entries.put(row);
+      await target.entries.put(row);
       snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
     }
   });
@@ -318,13 +406,14 @@ function applyToEntry(
 export async function applyEntryResult(
   snapshot: EntrySendSnapshot,
   result: { status: string; reason?: string | null; version?: number | null },
+  store?: LifeLogDB,
 ): Promise<void> {
   const ack = {
     kind: result.status === "error" ? ("error" as const) : ackKindFromStatus(result.status),
     version: result.version,
     reason: result.reason,
   };
-  const test = getTestQueue();
+  const { test, db: target } = resolveQueueAccess(store);
   if (test) {
     const row = test.entries.get(snapshot.id);
     if (!row) return;
@@ -334,14 +423,14 @@ export async function applyEntryResult(
     else test.entries.set(snapshot.id, out.row);
     return;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
-    const row = await store.entries.get(snapshot.id);
+  if (!target) return;
+  await target.transaction("rw", target.entries, async () => {
+    const row = await target.entries.get(snapshot.id);
     if (!row) return;
     const out = applyToEntry(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, ack);
     if (out.ignored) return;
-    if (out.drop) await store.entries.delete(snapshot.id);
-    else await store.entries.put(out.row);
+    if (out.drop) await target.entries.delete(snapshot.id);
+    else await target.entries.put(out.row);
   });
 }
 
@@ -544,7 +633,7 @@ export async function deleteOrphanEntries(ids: string[]): Promise<void> {
   await store.entries.bulkDelete(orphans.map((r) => r.id));
 }
 
-export async function persistServerEntries(items: EntryRead[], owner: string): Promise<void> {
+export async function persistServerEntries(items: EntryRead[], owner: string, store?: LifeLogDB): Promise<void> {
   const upsert = (existing: PendingEntry | undefined, item: EntryRead): PendingEntry | undefined => {
     if (existing && existing.status !== "synced") return existing;
     if (
@@ -567,7 +656,7 @@ export async function persistServerEntries(items: EntryRead[], owner: string): P
       cached_at: new Date().toISOString(),
     };
   };
-  const test = getTestQueue();
+  const { test, db: target } = resolveQueueAccess(store);
   if (test) {
     for (const item of items) {
       const next = upsert(test.entries.get(item.id), item);
@@ -575,11 +664,11 @@ export async function persistServerEntries(items: EntryRead[], owner: string): P
     }
     return;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
+  if (!target) return;
+  await target.transaction("rw", target.entries, async () => {
     for (const item of items) {
-      const next = upsert(await store.entries.get(item.id), item);
-      if (next) await store.entries.put(next);
+      const next = upsert(await target.entries.get(item.id), item);
+      if (next) await target.entries.put(next);
     }
   });
 }

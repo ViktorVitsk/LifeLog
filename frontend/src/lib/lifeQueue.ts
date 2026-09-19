@@ -1,7 +1,7 @@
 import { captureSaveScope, type SaveScope } from "./accountScope.ts";
 import { firstKnownIso, isStaleVersion, knownIso, nowIso } from "./cacheFreshness.ts";
 import { encryptEntry } from "./crypto.ts";
-import { getLifeDb, type LifeKind, type PendingLife } from "../db/offlineQueue.ts";
+import { ackLifeOpsForResult, getLifeDb, resolveQueueAccess, type LifeKind, type LifeLogDB, type PendingLife } from "../db/offlineQueue.ts";
 import { getTestQueue } from "../db/testQueue.ts";
 import { ackKindFromStatus, applyRevisionAck } from "./queueAck.ts";
 import type { LifeActionRead, LifeBundle, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "./api.ts";
@@ -70,37 +70,38 @@ export function applyLifeAck(
   };
 }
 
-async function readLife(id: string): Promise<PendingLife | undefined> {
-  const test = getTestQueue();
+async function readLife(id: string, store?: LifeLogDB): Promise<PendingLife | undefined> {
+  const { test, db } = resolveQueueAccess(store);
   if (test) return test.life.get(id);
-  return getLifeDb().life_queue.get(id);
+  return db?.life_queue.get(id);
 }
 
-export async function writeLife(row: PendingLife): Promise<void> {
-  const test = getTestQueue();
+export async function writeLife(row: PendingLife, store?: LifeLogDB): Promise<void> {
+  const { test, db } = resolveQueueAccess(store);
   if (test) {
     test.life.set(row.id, row);
     return;
   }
-  await getLifeDb().life_queue.put(row);
+  if (db) await db.life_queue.put(row);
 }
 
 export async function enqueueLife(
   kind: LifeKind,
   payload: Record<string, unknown>,
   scope?: SaveScope,
+  store?: LifeLogDB,
 ): Promise<void> {
   const owner = scope?.owner ?? captureSaveScope().owner;
   const id = String(payload.id);
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   if (test) {
     test.life.set(id, nextLifeEnqueue(test.life.get(id), kind, payload, owner));
     return;
   }
-  const store = getLifeDb();
-  await store.transaction("rw", store.life_queue, async () => {
-    const existing = await store.life_queue.get(id);
-    await store.life_queue.put(nextLifeEnqueue(existing, kind, payload, owner));
+  if (!db) return;
+  await db.transaction("rw", db.life_queue, async () => {
+    const existing = await db.life_queue.get(id);
+    await db.life_queue.put(nextLifeEnqueue(existing, kind, payload, owner));
   });
 }
 
@@ -128,9 +129,9 @@ export interface LifeSendSnapshot {
   status: PendingLife["status"];
 }
 
-export async function claimLifeForSend(userId: string): Promise<LifeSendSnapshot[]> {
+export async function claimLifeForSend(userId: string, store?: LifeLogDB): Promise<LifeSendSnapshot[]> {
   const snapshots: LifeSendSnapshot[] = [];
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   const mark = (row: PendingLife) => {
     if (row.owner_user_id !== userId) return;
     if (!["pending", "error", "pending_delete"].includes(row.status)) return;
@@ -150,8 +151,9 @@ export async function claimLifeForSend(userId: string): Promise<LifeSendSnapshot
     for (const row of test.life.values()) mark(row);
     return snapshots;
   }
-  await getLifeDb().transaction("rw", getLifeDb().life_queue, async () => {
-    const rows = await getLifeDb().life_queue
+  if (!db) return snapshots;
+  await db.transaction("rw", db.life_queue, async () => {
+    const rows = await db.life_queue
       .where("status")
       .anyOf(["pending", "error", "pending_delete"])
       .toArray();
@@ -159,7 +161,7 @@ export async function claimLifeForSend(userId: string): Promise<LifeSendSnapshot
       if (row.owner_user_id !== userId) continue;
       const local_rev = row.local_rev ?? 1;
       row.inflight_rev = local_rev;
-      await getLifeDb().life_queue.put(row);
+      await db.life_queue.put(row);
       snapshots.push({
         id: row.id,
         owner: row.owner_user_id,
@@ -177,8 +179,9 @@ export async function claimLifeForSend(userId: string): Promise<LifeSendSnapshot
 export async function applyLifeResult(
   snapshot: LifeSendSnapshot,
   result: { status: string; reason?: string | null; version?: number | null },
+  store?: LifeLogDB,
 ): Promise<void> {
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   const apply = (row: PendingLife | undefined) => {
     if (!row) return { drop: false as const, next: undefined };
     const out = applyLifeAck(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, result);
@@ -188,13 +191,16 @@ export async function applyLifeResult(
     const out = apply(test.life.get(snapshot.id));
     if (out.drop) test.life.delete(snapshot.id);
     else if (out.next) test.life.set(snapshot.id, out.next);
+    await ackLifeOpsForResult(snapshot.id, snapshot.local_rev, result, store);
     return;
   }
-  await getLifeDb().transaction("rw", getLifeDb().life_queue, async () => {
-    const row = await getLifeDb().life_queue.get(snapshot.id);
+  if (!db) return;
+  await db.transaction("rw", db.life_queue, db.life_ops, async () => {
+    const row = await db.life_queue.get(snapshot.id);
     const out = apply(row);
-    if (out.drop) await getLifeDb().life_queue.delete(snapshot.id);
-    else if (out.next) await getLifeDb().life_queue.put(out.next);
+    if (out.drop) await db.life_queue.delete(snapshot.id);
+    else if (out.next) await db.life_queue.put(out.next);
+    await ackLifeOpsForResult(snapshot.id, snapshot.local_rev, result, db);
   });
 }
 
@@ -216,8 +222,8 @@ export async function listOwnedLife(userId: string): Promise<PendingLife[]> {
   return rows.filter((row) => row.owner_user_id === userId);
 }
 
-export async function readLifeRow(id: string): Promise<PendingLife | undefined> {
-  return readLife(id);
+export async function readLifeRow(id: string, store?: LifeLogDB): Promise<PendingLife | undefined> {
+  return readLife(id, store);
 }
 
 export function lifeSyncPayload(row: PendingLife): Record<string, unknown> {
@@ -305,7 +311,7 @@ function asCacheRow(kind: LifeKind, item: LifeGoalRead | LifeMemoryRead | LifeAc
   };
 }
 
-export async function persistServerLife(bundle: LifeBundle, owner: string): Promise<void> {
+export async function persistServerLife(bundle: LifeBundle, owner: string, store?: LifeLogDB): Promise<void> {
   const groups: [LifeKind, { id: string }[]][] = [
     ["goal", bundle.goals],
     ["memory", bundle.memory],
@@ -330,7 +336,7 @@ export async function persistServerLife(bundle: LifeBundle, owner: string): Prom
     if (existing.status === "pending_delete") return existing;
     return { ...existing, server_snapshot: payload, conflict_version: item.version ?? existing.conflict_version };
   };
-  const test = getTestQueue();
+  const { test, db } = resolveQueueAccess(store);
   if (test) {
     for (const [kind, items] of groups) {
       for (const item of items as (LifeGoalRead | LifeMemoryRead | LifeActionRead | LifeFeedbackRead)[]) {
@@ -339,11 +345,12 @@ export async function persistServerLife(bundle: LifeBundle, owner: string): Prom
     }
     return;
   }
-  await getLifeDb().transaction("rw", getLifeDb().life_queue, async () => {
+  if (!db) return;
+  await db.transaction("rw", db.life_queue, async () => {
     for (const [kind, items] of groups) {
       for (const item of items as (LifeGoalRead | LifeMemoryRead | LifeActionRead | LifeFeedbackRead)[]) {
-        const existing = await getLifeDb().life_queue.get(item.id);
-        await getLifeDb().life_queue.put(upsert(existing, kind, item));
+        const existing = await db.life_queue.get(item.id);
+        await db.life_queue.put(upsert(existing, kind, item));
       }
     }
   });

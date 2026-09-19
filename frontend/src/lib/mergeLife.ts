@@ -81,22 +81,30 @@ export function mergeLifeBundle(
   pending: PendingLife[],
   userId: string | null,
 ): LifeBundle {
-  const empty: LifeBundle = {
-    goals: [],
-    memory: [],
-    actions: [],
-    feedback: [],
-    due_action_ids: [],
-  };
-  const base = server ?? empty;
   const mine = pending.filter((row) => row.owner_user_id === userId);
   const hidden = new Set(mine.filter((row) => row.status === "pending_delete").map((row) => row.id));
+  const cache = mine.filter((row) => row.status === "synced");
   const overlay = mine.filter((row) => row.status !== "pending_delete" && row.status !== "synced");
 
-  const goals = new Map(base.goals.filter((g) => !hidden.has(g.id)).map((g) => [g.id, g]));
-  const memory = new Map(base.memory.filter((m) => !hidden.has(m.id)).map((m) => [m.id, m]));
-  const actions = new Map(base.actions.filter((a) => !hidden.has(a.id)).map((a) => [a.id, a]));
-  const feedback = new Map(base.feedback.filter((f) => !hidden.has(f.id)).map((f) => [f.id, f]));
+  const goals = new Map<string, LifeGoalRead>();
+  const memory = new Map<string, LifeMemoryRead>();
+  const actions = new Map<string, LifeActionRead>();
+  const feedback = new Map<string, LifeFeedbackRead>();
+
+  for (const row of cache) {
+    if (hidden.has(row.id)) continue;
+    if (row.kind === "goal") goals.set(row.id, asGoal(row));
+    if (row.kind === "memory") memory.set(row.id, asMemory(row));
+    if (row.kind === "action") actions.set(row.id, asAction(row));
+    if (row.kind === "feedback") feedback.set(row.id, asFeedback(row));
+  }
+
+  if (server) {
+    for (const g of server.goals) if (!hidden.has(g.id)) goals.set(g.id, g);
+    for (const m of server.memory) if (!hidden.has(m.id)) memory.set(m.id, m);
+    for (const a of server.actions) if (!hidden.has(a.id)) actions.set(a.id, a);
+    for (const f of server.feedback) if (!hidden.has(f.id)) feedback.set(f.id, f);
+  }
 
   for (const row of overlay) {
     if (row.kind === "goal") goals.set(row.id, asGoal(row));

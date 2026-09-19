@@ -37,6 +37,42 @@ describe("merge life queue", () => {
     assert.equal(merged.memory[0].id, "m1");
   });
 
+  it("keeps a local synced goal when the server bundle is missing", () => {
+    const row: PendingLife = {
+      id: "g-sync",
+      kind: "goal",
+      payload: { state: "active", encrypted_dek: "d", encrypted_content: "c", title: "cached" },
+      status: "synced",
+      owner_user_id: "u1",
+      queued_at: 1,
+      server_version: 3,
+    };
+    const merged = mergeLifeBundle(undefined, [row], "u1");
+    assert.equal(merged.goals.length, 1);
+    assert.equal(merged.goals[0].id, "g-sync");
+  });
+
+  it("does not treat a missing server id as a delete when a cache row exists", () => {
+    const cached: PendingLife = {
+      id: "g-other-device",
+      kind: "goal",
+      payload: { state: "active", encrypted_dek: "d", encrypted_content: "c" },
+      status: "synced",
+      owner_user_id: "u1",
+      queued_at: 1,
+    };
+    const server = {
+      goals: [],
+      memory: [],
+      actions: [],
+      feedback: [],
+      due_action_ids: [],
+    };
+    const merged = mergeLifeBundle(server, [cached], "u1");
+    assert.equal(merged.goals.length, 1);
+    assert.equal(merged.goals[0].id, "g-other-device");
+  });
+
   it("does not duplicate a pending overlay of a server row", () => {
     const server = {
       goals: [

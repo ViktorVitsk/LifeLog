@@ -8,9 +8,11 @@ import { useHabits } from "../hooks/useCatalog";
 import { useMergedLife } from "../hooks/useMergedLife";
 import type { LifeActionRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
+import { resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
 import { queueSyncLabel } from "../lib/mergeLife";
 import type { SaveScope } from "../lib/accountScope";
 import type { TStrings } from "../i18n/strings";
+import type { PendingLife } from "../db/offlineQueue";
 
 function newId(): string {
   return crypto.randomUUID();
@@ -36,7 +38,7 @@ export default function LifePage() {
   const { trigger } = useSync();
   const qc = useQueryClient();
   const habits = useHabits().data ?? [];
-  const { bundle, statuses } = useMergedLife();
+  const { bundle, statuses, local } = useMergedLife();
   const goalPlain = useDecryptedMap(bundle.goals, kek);
   const [msg, setMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -91,6 +93,24 @@ export default function LifePage() {
           ? "text-rose-300"
           : "text-amber-200";
     return <span className={`text-[11px] ${cls}`}>{text}</span>;
+  }
+
+  async function resolveConflict(id: string, mode: "server" | "local" | "copy") {
+    if (!userId) return;
+    if (mode === "server") await resolveLifeKeepServer(id, userId);
+    else if (mode === "local") await resolveLifeApplyLocal(id, userId);
+    else await resolveLifeKeepLocalCopy(id, userId, newId());
+    if (token && (typeof navigator === "undefined" || navigator.onLine)) {
+      await flushLifeQueue(token, userId).catch(() => undefined);
+      await qc.invalidateQueries({ queryKey: ["life", userId] });
+      trigger();
+    }
+  }
+
+  function conflictPanel(id: string) {
+    const row = local.find((item) => item.id === id);
+    if (!row || row.status !== "conflict") return null;
+    return <ConflictPanel row={row} kek={kek} t={t} onResolve={(mode) => void resolveConflict(id, mode)} />;
   }
 
   async function onCreateGoal() {
@@ -291,6 +311,7 @@ export default function LifePage() {
               </CipherCard>
               {badge(g.id)}
             </div>
+            {conflictPanel(g.id)}
           </div>
         ))}
       </section>
@@ -313,6 +334,7 @@ export default function LifePage() {
             onStale={() => void writeMemory(m, { state: "stale", reviewed_at: new Date().toISOString() })}
             onDelete={() => void writeMemory(m, { deleted: true })}
             onEdit={(text) => void writeMemory(m, { state: m.state, reviewed_at: new Date().toISOString() }, { statement: text, sensitive_grounds: "" })}
+            extra={conflictPanel(m.id)}
           />
         ))}
       </section>
@@ -351,6 +373,7 @@ export default function LifePage() {
             t={t}
             outcomeLabel={outcomeLabel}
             feedback={bundle.feedback.filter((f) => f.action_id === a.id)}
+            extra={conflictPanel(a.id)}
             onReviewAt={(iso) => void writeAction(a, { review_at: iso })}
             onFeedback={(next, fields) => void onFeedback(a, next, fields)}
           />
@@ -370,6 +393,7 @@ function MemoryRow({
   onStale,
   onDelete,
   onEdit,
+  extra,
 }: {
   item: LifeMemoryRead;
   kek: CryptoKey | null;
@@ -380,6 +404,7 @@ function MemoryRow({
   onStale: () => void;
   onDelete: () => void;
   onEdit: (text: string) => void;
+  extra?: ReactNode;
 }) {
   const [editing, setEditing] = useState("");
   return (
@@ -429,6 +454,7 @@ function MemoryRow({
           {t.save}
         </button>
       </div>
+      {extra}
     </div>
   );
 }
@@ -441,6 +467,7 @@ function ActionRow({
   t,
   outcomeLabel,
   feedback,
+  extra,
   onReviewAt,
   onFeedback,
 }: {
@@ -450,6 +477,7 @@ function ActionRow({
   badge: ReactNode;
   t: TStrings;
   outcomeLabel: (kind: string, t: TStrings) => string;
+  extra?: ReactNode;
   feedback: { outcome_kind: string }[];
   onReviewAt: (iso: string) => void;
   onFeedback: (
@@ -515,6 +543,55 @@ function ActionRow({
           </div>
         </div>
       )}
+      {extra}
+    </div>
+  );
+}
+
+function ConflictPanel({
+  row,
+  kek,
+  t,
+  onResolve,
+}: {
+  row: PendingLife;
+  kek: CryptoKey | null;
+  t: TStrings;
+  onResolve: (mode: "server" | "local" | "copy") => void;
+}) {
+  const server = row.server_snapshot;
+  return (
+    <div className="rounded border border-rose-900/70 bg-rose-950/20 p-2 space-y-2 text-xs">
+      <p className="text-rose-200">{t.conflictKeepBoth}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <div className="text-zinc-400">{t.conflictLocal}</div>
+          <CipherCard kek={kek} dek={String(row.payload.encrypted_dek ?? "")} ct={String(row.payload.encrypted_content ?? "")} fallback={row.id}>
+            {(plain) => <pre className="whitespace-pre-wrap text-[11px] text-zinc-200">{JSON.stringify(plain, null, 2)}</pre>}
+          </CipherCard>
+        </div>
+        <div>
+          <div className="text-zinc-400">{t.conflictServer}</div>
+          {server ? (
+            <CipherCard kek={kek} dek={String(server.encrypted_dek ?? "")} ct={String(server.encrypted_content ?? "")} fallback={row.id}>
+              {(plain) => <pre className="whitespace-pre-wrap text-[11px] text-zinc-200">{JSON.stringify(plain, null, 2)}</pre>}
+            </CipherCard>
+          ) : (
+            <p className="text-zinc-500">{t.conflictServerMissing}</p>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <button type="button" className="px-2 py-1 rounded bg-zinc-800" onClick={() => onResolve("server")}>
+          {t.conflictKeepServer}
+        </button>
+        <button type="button" className="px-2 py-1 rounded bg-zinc-800" onClick={() => onResolve("copy")}>
+          {t.conflictKeepLocalCopy}
+        </button>
+        <button type="button" className="px-2 py-1 rounded bg-indigo-600" onClick={() => onResolve("local")}>
+          {t.conflictApplyLocal}
+        </button>
+      </div>
     </div>
   );
 }

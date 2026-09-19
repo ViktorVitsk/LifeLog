@@ -1,22 +1,15 @@
 import {
-  ackDeletes,
+  applyEntryResult,
   applyEntryTombstones,
-  getEntryStatuses,
-  getPendingForSync,
-  markError,
-  markInflight,
-  markRejected,
-  markSynced,
+  claimPendingEntries,
+  persistServerEntries,
+  type EntrySendSnapshot,
 } from "../db/offlineQueue";
-import { api, isAuthError, isNetworkError, type EntrySyncPayload } from "../lib/api";
-import { applyLifeTombstones } from "../lib/lifeQueue";
+import { api, isAuthError, isNetworkError } from "../lib/api";
+import { applyLifeTombstones, persistServerLife } from "../lib/lifeQueue";
 import { flushLifeQueue } from "../lib/lifeStore";
 import { withSyncLock } from "../lib/syncLock.ts";
-import { planQueueUpdates } from "./syncContract.ts";
 
-/**
- * Pushes pending entries in one POST. Queue status follows per-item results.
- */
 export interface SyncResult {
   attempted: number;
   saved: number;
@@ -25,8 +18,44 @@ export interface SyncResult {
   error?: string;
 }
 
+export async function pullRemoteDeletes(token: string): Promise<void> {
+  try {
+    const tombs = await api.getEntryTombstones(token);
+    await applyEntryTombstones((tombs.items ?? []).map((item) => item.id));
+  } catch {
+    /* keep local rows unless an explicit tombstone arrives */
+  }
+}
+
+export async function refreshLifeCache(token: string, userId: string): Promise<void> {
+  try {
+    const bundle = await api.getLife(token);
+    await persistServerLife(bundle, userId);
+  } catch {
+    /* last known cache stays */
+  }
+}
+
 export async function runSyncOnce(token: string, userId?: string): Promise<SyncResult> {
   return withSyncLock(() => runSyncOnceUnlocked(token, userId));
+}
+
+async function applySnapshots(
+  snapshots: EntrySendSnapshot[],
+  results: { id: string; status: string; reason?: string | null; version?: number | null }[],
+): Promise<{ saved: number; failed: number; deleted: number }> {
+  const byId = new Map(results.map((row) => [row.id, row]));
+  let saved = 0;
+  let failed = 0;
+  let deleted = 0;
+  for (const snap of snapshots) {
+    const result = byId.get(snap.id) ?? { id: snap.id, status: "error", reason: "missing_result" };
+    await applyEntryResult(snap, result);
+    if (result.status === "created" || result.status === "duplicate" || result.status === "updated") saved += 1;
+    else if (result.status === "deleted") deleted += 1;
+    else if (result.status === "conflict" || result.status === "rejected") failed += 1;
+  }
+  return { saved, failed, deleted };
 }
 
 async function runSyncOnceUnlocked(token: string, userId?: string): Promise<SyncResult> {
@@ -34,91 +63,38 @@ async function runSyncOnceUnlocked(token: string, userId?: string): Promise<Sync
     return { attempted: 0, saved: 0, failed: 0, error: "offline" };
   }
 
-  const pending = await getPendingForSync(100, userId);
-  if (pending.length === 0) return { attempted: 0, saved: 0, failed: 0 };
-
-  const ids = pending.map((p) => p.id);
-
-  const payload: EntrySyncPayload[] = pending.map((p) => ({
-    id: p.id,
-    timestamp: p.timestamp,
-    entry_type: p.entry_type,
-    skill_id: p.skill_id,
-    habit_id: p.habit_id,
-    context_id: p.context_id,
-    tags: p.tags,
-    mood_score: p.mood_score,
-    energy_score: p.energy_score,
-    anxiety_score: p.anxiety_score,
-    focus_score: p.focus_score,
-    social_battery_score: p.social_battery_score,
-    stress_score: p.stress_score,
-    sleep_hours: p.sleep_hours,
-    sleep_quality: p.sleep_quality,
-    weight_kg: p.weight_kg,
-    body_fat_pct: p.body_fat_pct,
-    session_duration_min: p.session_duration_min,
-    habit_completed: p.habit_completed,
-    habit_value: p.habit_value,
-    resentment_score: p.resentment_score,
-    guilt_score: p.guilt_score,
-    shame_score: p.shame_score,
-    fear_score: p.fear_score,
-    encrypted_dek: p.encrypted_dek,
-    encrypted_content: p.encrypted_content,
-    version: p.version ?? 1,
-    deleted: p.status === "pending_delete" || p.deleted === true,
-    recorded_at: p.recorded_at,
-    event_timezone: p.event_timezone,
-  }));
+  const snapshots = await claimPendingEntries(100, userId);
+  if (snapshots.length === 0) {
+    await pullRemoteDeletes(token);
+    return { attempted: 0, saved: 0, failed: 0 };
+  }
 
   try {
-    const sentRevs = await markInflight(ids);
-    const resp = await api.syncEntries(payload, token);
-    const after = await getEntryStatuses(ids);
-    const deletingIds = pending.filter((p) => p.status === "pending_delete" || p.deleted).map((p) => p.id);
-    const hideCreatedIfTombstone = ids.filter((id) => after[id] === "pending_delete");
-    const plan = planQueueUpdates(resp, ids, { deletingIds, hideCreatedIfTombstone });
-    const versions: Record<string, number> = {};
-    for (const row of resp.results ?? []) {
-      if (typeof row.version === "number") versions[row.id] = row.version;
-    }
-    await markSynced(plan.markSynced, { sentRevs, versions });
-    await markRejected(plan.markRejected);
-    await ackDeletes(plan.ackDelete);
-    try {
-      const tombs = await api.getEntryTombstones(token);
-      await applyEntryTombstones((tombs.items ?? []).map((item) => item.id));
-    } catch {
-      /* tombstone pull is best-effort; local pending rows stay */
-    }
+    const resp = await api.syncEntries(
+      snapshots.map((snap) => snap.payload),
+      token,
+    );
+    const counts = await applySnapshots(snapshots, resp.results ?? []);
+    await pullRemoteDeletes(token);
     return {
-      attempted: pending.length,
-      saved: plan.markSynced.length,
-      failed: plan.markRejected.length,
-      deleted: plan.ackDelete.length,
-      error: plan.markRejected[0]?.reason,
+      attempted: snapshots.length,
+      saved: counts.saved,
+      failed: counts.failed,
+      deleted: counts.deleted,
+      error: resp.results?.find((row) => row.status === "conflict" || row.status === "rejected")?.reason ?? undefined,
     };
   } catch (e) {
     if (isNetworkError(e)) {
-      return {
-        attempted: pending.length,
-        saved: 0,
-        failed: 0,
-        error: "offline",
-      };
+      return { attempted: snapshots.length, saved: 0, failed: 0, error: "offline" };
     }
     if (isAuthError(e)) {
-      return {
-        attempted: pending.length,
-        saved: 0,
-        failed: 0,
-        error: "auth",
-      };
+      return { attempted: snapshots.length, saved: 0, failed: 0, error: "auth" };
     }
     const msg = (e as Error).message ?? "sync failed";
-    await markError(ids, msg);
-    return { attempted: pending.length, saved: 0, failed: pending.length, error: msg };
+    for (const snap of snapshots) {
+      await applyEntryResult(snap, { status: "error", reason: msg });
+    }
+    return { attempted: snapshots.length, saved: 0, failed: snapshots.length, error: msg };
   }
 }
 
@@ -154,6 +130,7 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
       } catch {
         /* keep local life rows unless an explicit tombstone arrives */
       }
+      await refreshLifeCache(token, userId);
       onResult?.(lifeSaved ? { ...r, saved: r.saved + lifeSaved } : r);
     })().finally(() => {
       inFlight = null;
@@ -183,3 +160,5 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
     },
   };
 }
+
+export { persistServerEntries };

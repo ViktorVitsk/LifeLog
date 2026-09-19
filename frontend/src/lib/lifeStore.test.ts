@@ -35,13 +35,13 @@ describe("life queue local revision", () => {
     assert.equal(second.local_rev, 2);
     assert.equal(second.payload.encrypted_content, "B");
 
-    const afterAck = applyLifeAck(second, 1, { status: "created", version: 1 });
+    const afterAck = applyLifeAck(second, 1, { status: "created", version: 1 }).row;
     assert.equal(afterAck.status, "pending");
     assert.equal(afterAck.local_rev, 2);
     assert.equal(afterAck.server_version, 1);
     assert.equal(afterAck.payload.encrypted_content, "B");
 
-    const afterSecond = applyLifeAck(afterAck, 2, { status: "updated", version: 2 });
+    const afterSecond = applyLifeAck(afterAck, 2, { status: "updated", version: 2 }).row;
     assert.equal(afterSecond.status, "synced");
     assert.equal(afterSecond.server_version, 2);
   });
@@ -53,7 +53,7 @@ describe("life queue local revision", () => {
       { id: "a1", encrypted_content: "A", encrypted_dek: "d", state: "accepted" },
       "user-a",
     );
-    const synced = applyLifeAck(row, 1, { status: "created", version: 1 });
+    const synced = applyLifeAck(row, 1, { status: "created", version: 1 }).row;
     assert.equal(synced.status, "synced");
     assert.equal(synced.server_version, 1);
   });
@@ -65,7 +65,7 @@ describe("life queue local revision", () => {
       { id: "m1", encrypted_content: "A", encrypted_dek: "d", state: "proposed" },
       "user-a",
     );
-    const rejected = applyLifeAck(row, 1, { status: "rejected", reason: "invalid_state" });
+    const rejected = applyLifeAck(row, 1, { status: "rejected", reason: "invalid_state" }).row;
     assert.equal(rejected.status, "rejected");
     assert.equal(rejected.last_error, "invalid_state");
   });
@@ -77,8 +77,19 @@ describe("life queue local revision", () => {
       { id: "g2", encrypted_content: "A", encrypted_dek: "d", state: "active" },
       "user-a",
     );
-    const conflicted = applyLifeAck(row, 1, { status: "conflict", reason: "version_mismatch" });
+    const conflicted = applyLifeAck(row, 1, { status: "conflict", reason: "version_mismatch" }).row;
     assert.equal(conflicted.status, "conflict");
     assert.notEqual(conflicted.status, "synced");
+  });
+
+  it("does not turn a stale conflict into a CAS overwrite", () => {
+    const first = nextLifeEnqueue(undefined, "goal", { id: "g3", encrypted_content: "A", state: "active" }, "user-a");
+    first.server_version = 7;
+    const second = nextLifeEnqueue(first, "goal", { id: "g3", encrypted_content: "B", state: "active" }, "user-a");
+    const after = applyLifeAck(second, 1, { status: "conflict", reason: "version_mismatch", version: 9 }).row;
+    assert.equal(after.status, "pending");
+    assert.equal(after.server_version, 7);
+    assert.equal(after.conflict_version, 9);
+    assert.equal(after.payload.encrypted_content, "B");
   });
 });

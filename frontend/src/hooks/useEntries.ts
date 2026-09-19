@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useMemo } from "react";
 import { getSessionToken, useAuth } from "../context/AuthContext";
-import { db, type PendingEntry } from "../db/offlineQueue";
+import { db, persistServerEntries, type PendingEntry } from "../db/offlineQueue";
 import { api, AuthError, type EntryRead } from "../lib/api";
 import { mergeEntryStreams } from "../sync/mergeEntries";
 
@@ -45,10 +45,12 @@ export function useEntries() {
   const serverQuery = useQuery<EntryRead[]>({
     queryKey: ["entries", userId],
     enabled: Boolean(token && userId),
-    queryFn: () => {
+    queryFn: async () => {
       const t = getSessionToken();
       if (!t) throw new AuthError("session expired");
-      return api.listEntries(t, { limit: 1000 });
+      const items = await api.listEntries(t, { limit: 1000 });
+      if (userId) await persistServerEntries(items, userId);
+      return items;
     },
   });
 

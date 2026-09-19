@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { db, type PendingLife } from "../db/offlineQueue";
 import { api, type LifeBundle } from "../lib/api";
+import { persistServerLife } from "../lib/lifeQueue";
 import { mergeLifeBundle, nextDueAt } from "../lib/mergeLife";
 
 export function useMergedLife() {
@@ -11,7 +12,11 @@ export function useMergedLife() {
   const server = useQuery<LifeBundle>({
     queryKey: ["life", userId],
     enabled: Boolean(token && userId),
-    queryFn: () => api.getLife(token!),
+    queryFn: async () => {
+      const bundle = await api.getLife(token!);
+      if (userId) await persistServerLife(bundle, userId);
+      return bundle;
+    },
     staleTime: 0,
     refetchOnMount: "always",
   });

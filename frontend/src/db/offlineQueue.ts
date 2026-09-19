@@ -5,7 +5,8 @@ import {
   requireCurrentUserId,
   type SaveScope,
 } from "../lib/accountScope.ts";
-import type { EntrySyncPayload } from "../lib/api.ts";
+import type { EntryRead, EntrySyncPayload } from "../lib/api.ts";
+import { ackKindFromStatus, applyRevisionAck } from "../lib/queueAck.ts";
 import { getTestQueue } from "./testQueue.ts";
 
 export type QueueStatus = "pending" | "synced" | "error" | "rejected" | "conflict" | "pending_delete";
@@ -19,6 +20,7 @@ export interface PendingEntry extends EntrySyncPayload {
   owner_user_id?: string;
   local_rev?: number;
   inflight_rev?: number;
+  conflict_version?: number;
 }
 
 export interface StoredChatTurn {
@@ -69,6 +71,8 @@ export interface PendingLife {
   local_rev?: number;
   inflight_rev?: number;
   server_version?: number;
+  conflict_version?: number;
+  server_snapshot?: Record<string, unknown>;
 }
 
 export class LifeLogDB extends Dexie {
@@ -119,98 +123,221 @@ export function resolveWriteOwner(scope?: SaveScope): string {
   return requireCurrentUserId();
 }
 
-export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope): Promise<void> {
-  const owner = resolveWriteOwner(scope);
-  const test = getTestQueue();
-  const existing = test ? test.entries.get(payload.id) : await db.entries.get(payload.id);
-  const row: PendingEntry = {
+export function nextEntryEnqueue(existing: PendingEntry | undefined, payload: EntrySyncPayload, owner: string): PendingEntry {
+  return {
     ...payload,
     owner_user_id: owner,
     status: payload.deleted ? "pending_delete" : "pending",
     queued_at: Date.now(),
-    attempts: 0,
+    attempts: existing?.attempts ?? 0,
     local_rev: (existing?.local_rev ?? 0) + 1,
     inflight_rev: existing?.inflight_rev,
+    version: existing?.version ?? payload.version,
+    conflict_version: existing?.conflict_version,
   };
+}
+
+export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope): Promise<void> {
+  const owner = resolveWriteOwner(scope);
+  const test = getTestQueue();
   if (test) {
-    test.entries.set(row.id, row);
+    test.entries.set(payload.id, nextEntryEnqueue(test.entries.get(payload.id), payload, owner));
     return;
   }
-  await db.entries.put(row);
+  await db.transaction("rw", db.entries, async () => {
+    const existing = await db.entries.get(payload.id);
+    await db.entries.put(nextEntryEnqueue(existing, payload, owner));
+  });
+}
+
+export interface EntrySendSnapshot {
+  id: string;
+  owner: string;
+  local_rev: number;
+  payload: EntrySyncPayload;
+}
+
+function dummyPayload(id: string, deleted = false): EntrySyncPayload {
+  return { id, timestamp: "", entry_type: "THOUGHT", encrypted_dek: "", encrypted_content: "", tags: [], deleted };
+}
+
+function toEntryPayload(row: PendingEntry): EntrySyncPayload {
+  return {
+    id: row.id,
+    timestamp: row.timestamp,
+    entry_type: row.entry_type,
+    skill_id: row.skill_id,
+    habit_id: row.habit_id,
+    context_id: row.context_id,
+    tags: row.tags ?? [],
+    mood_score: row.mood_score,
+    energy_score: row.energy_score,
+    anxiety_score: row.anxiety_score,
+    focus_score: row.focus_score,
+    social_battery_score: row.social_battery_score,
+    stress_score: row.stress_score,
+    sleep_hours: row.sleep_hours,
+    sleep_quality: row.sleep_quality,
+    weight_kg: row.weight_kg,
+    body_fat_pct: row.body_fat_pct,
+    session_duration_min: row.session_duration_min,
+    habit_completed: row.habit_completed,
+    habit_value: row.habit_value,
+    resentment_score: row.resentment_score,
+    guilt_score: row.guilt_score,
+    shame_score: row.shame_score,
+    fear_score: row.fear_score,
+    encrypted_dek: row.encrypted_dek,
+    encrypted_content: row.encrypted_content,
+    version: row.version ?? 1,
+    deleted: row.status === "pending_delete" || row.deleted === true,
+    recorded_at: row.recorded_at,
+    event_timezone: row.event_timezone,
+  };
+}
+
+export async function claimPendingEntries(limit = 50, userId?: string): Promise<EntrySendSnapshot[]> {
+  const owner = userId ?? getCurrentUserId();
+  if (!owner) return [];
+  const snapshots: EntrySendSnapshot[] = [];
+  const take = (row: PendingEntry) => {
+    if (row.owner_user_id !== owner) return;
+    if (!["pending", "error", "pending_delete"].includes(row.status)) return;
+    const local_rev = row.local_rev ?? 1;
+    row.inflight_rev = local_rev;
+    snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
+  };
+  const test = getTestQueue();
+  if (test) {
+    const rows = [...test.entries.values()].sort((a, b) => a.queued_at - b.queued_at);
+    for (const row of rows) {
+      if (snapshots.length >= limit) break;
+      take(row);
+    }
+    return snapshots;
+  }
+  await db.transaction("rw", db.entries, async () => {
+    const rows = await db.entries
+      .where("status")
+      .anyOf(["pending", "error", "pending_delete"])
+      .sortBy("queued_at");
+    for (const row of rows) {
+      if (snapshots.length >= limit) break;
+      if (row.owner_user_id !== owner) continue;
+      const local_rev = row.local_rev ?? 1;
+      row.inflight_rev = local_rev;
+      await db.entries.put(row);
+      snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
+    }
+  });
+  return snapshots;
+}
+
+function applyToEntry(
+  row: PendingEntry,
+  sent: { owner: string; local_rev: number },
+  ack: { kind: "success" | "conflict" | "rejected" | "error" | "deleted"; version?: number | null; reason?: string | null },
+) {
+  const out = applyRevisionAck(
+    {
+      local_rev: row.local_rev,
+      inflight_rev: row.inflight_rev,
+      server_version: row.version ?? undefined,
+      status: row.status,
+      last_error: row.last_error,
+      conflict_version: row.conflict_version,
+      owner_user_id: row.owner_user_id,
+    },
+    sent,
+    ack,
+  );
+  return {
+    drop: out.drop,
+    ignored: out.ignored,
+    row: {
+      ...row,
+      local_rev: out.row.local_rev,
+      inflight_rev: out.row.inflight_rev,
+      version: out.row.server_version,
+      status: out.row.status,
+      last_error: out.row.last_error,
+      conflict_version: out.row.conflict_version,
+    } satisfies PendingEntry,
+  };
+}
+
+export async function applyEntryResult(
+  snapshot: EntrySendSnapshot,
+  result: { status: string; reason?: string | null; version?: number | null },
+): Promise<void> {
+  const ack = {
+    kind: result.status === "error" ? ("error" as const) : ackKindFromStatus(result.status),
+    version: result.version,
+    reason: result.reason,
+  };
+  const test = getTestQueue();
+  if (test) {
+    const row = test.entries.get(snapshot.id);
+    if (!row) return;
+    const out = applyToEntry(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, ack);
+    if (out.ignored) return;
+    if (out.drop) test.entries.delete(snapshot.id);
+    else test.entries.set(snapshot.id, out.row);
+    return;
+  }
+  await db.transaction("rw", db.entries, async () => {
+    const row = await db.entries.get(snapshot.id);
+    if (!row) return;
+    const out = applyToEntry(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, ack);
+    if (out.ignored) return;
+    if (out.drop) await db.entries.delete(snapshot.id);
+    else await db.entries.put(out.row);
+  });
 }
 
 export async function markSynced(
   ids: string[],
-  opts?: { sentRevs?: Record<string, number>; versions?: Record<string, number> },
+  opts?: { sentRevs?: Record<string, number>; versions?: Record<string, number>; owner?: string },
 ): Promise<void> {
   if (ids.length === 0) return;
   const sentRevs = opts?.sentRevs ?? {};
   const versions = opts?.versions ?? {};
-  const apply = (entry: PendingEntry) => {
-    const sent = sentRevs[entry.id];
-    if (sent != null && (entry.local_rev ?? 1) !== sent) {
-      entry.inflight_rev = undefined;
-      return;
-    }
-    entry.status = "synced";
-    entry.attempts = 0;
-    entry.inflight_rev = undefined;
-    if (versions[entry.id] != null) entry.version = versions[entry.id];
-    else if (entry.version == null) entry.version = 1;
-  };
-  const test = getTestQueue();
-  if (test) {
-    for (const id of ids) {
-      const row = test.entries.get(id);
-      if (row) apply(row);
-    }
-    return;
+  const owner = opts?.owner;
+  for (const id of ids) {
+    await applyEntryResult(
+      { id, owner: owner ?? getCurrentUserId() ?? "", local_rev: sentRevs[id] ?? 1, payload: dummyPayload(id) },
+      { status: "updated", version: versions[id] },
+    );
   }
-  await db.entries
-    .where("id")
-    .anyOf(ids)
-    .modify(apply);
 }
 
-export async function markError(ids: string[], error: string): Promise<void> {
+export async function markError(
+  ids: string[],
+  error: string,
+  opts?: { sentRevs?: Record<string, number>; owner?: string },
+): Promise<void> {
   if (ids.length === 0) return;
-  const apply = (entry: PendingEntry) => {
-    entry.status = "error";
-    entry.last_error = error.slice(0, 200);
-    entry.last_attempt_at = Date.now();
-    entry.attempts = (entry.attempts ?? 0) + 1;
-  };
-  const test = getTestQueue();
-  if (test) {
-    for (const id of ids) {
-      const row = test.entries.get(id);
-      if (row) apply(row);
-    }
-    return;
+  const owner = opts?.owner ?? getCurrentUserId() ?? "";
+  for (const id of ids) {
+    await applyEntryResult(
+      { id, owner, local_rev: opts?.sentRevs?.[id] ?? 1, payload: dummyPayload(id) },
+      { status: "error", reason: error },
+    );
   }
-  await db.entries.where("id").anyOf(ids).modify(apply);
 }
 
-export async function markRejected(items: { id: string; reason: string; conflict?: boolean }[]): Promise<void> {
+export async function markRejected(
+  items: { id: string; reason: string; conflict?: boolean }[],
+  opts?: { sentRevs?: Record<string, number>; owner?: string; versions?: Record<string, number> },
+): Promise<void> {
   if (items.length === 0) return;
-  const byId = new Map(items.map((item) => [item.id, item]));
-  const apply = (entry: PendingEntry) => {
-    const item = byId.get(entry.id);
-    if (!item) return;
-    entry.status = item.conflict || item.reason === "version_mismatch" ? "conflict" : "rejected";
-    entry.last_error = item.reason.slice(0, 200);
-    entry.last_attempt_at = Date.now();
-    entry.attempts = (entry.attempts ?? 0) + 1;
-  };
-  const test = getTestQueue();
-  if (test) {
-    for (const id of byId.keys()) {
-      const row = test.entries.get(id);
-      if (row) apply(row);
-    }
-    return;
+  const owner = opts?.owner ?? getCurrentUserId() ?? "";
+  for (const item of items) {
+    await applyEntryResult(
+      { id: item.id, owner, local_rev: opts?.sentRevs?.[item.id] ?? 1, payload: dummyPayload(item.id) },
+      { status: item.conflict || item.reason === "version_mismatch" ? "conflict" : "rejected", reason: item.reason, version: opts?.versions?.[item.id] },
+    );
   }
-  await db.entries.where("id").anyOf([...byId.keys()]).modify(apply);
 }
 
 export async function getPendingForSync(limit = 50, userId?: string): Promise<PendingEntry[]> {
@@ -237,19 +364,44 @@ export async function markPendingDelete(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const owner = getCurrentUserId();
   if (!owner) return;
-  await db.entries
-    .where("id")
-    .anyOf(ids)
-    .modify((entry) => {
-      if (entry.owner_user_id !== owner) return;
-      entry.status = "pending_delete";
-      entry.deleted = true;
-      entry.last_attempt_at = Date.now();
-    });
+  const test = getTestQueue();
+  const bump = (entry: PendingEntry) => {
+    if (entry.owner_user_id !== owner) return entry;
+    return {
+      ...entry,
+      status: "pending_delete" as const,
+      deleted: true,
+      last_attempt_at: Date.now(),
+      local_rev: (entry.local_rev ?? 0) + 1,
+    };
+  };
+  if (test) {
+    for (const id of ids) {
+      const row = test.entries.get(id);
+      if (row) test.entries.set(id, bump(row));
+    }
+    return;
+  }
+  await db.transaction("rw", db.entries, async () => {
+    for (const id of ids) {
+      const row = await db.entries.get(id);
+      if (!row || row.owner_user_id !== owner) continue;
+      await db.entries.put(bump(row));
+    }
+  });
 }
 
-export async function ackDeletes(ids: string[]): Promise<void> {
-  await deleteLocalEntries(ids);
+export async function ackDeletes(
+  ids: string[],
+  opts?: { sentRevs?: Record<string, number>; owner?: string; versions?: Record<string, number> },
+): Promise<void> {
+  const owner = opts?.owner ?? getCurrentUserId() ?? "";
+  for (const id of ids) {
+    await applyEntryResult(
+      { id, owner, local_rev: opts?.sentRevs?.[id] ?? 1, payload: dummyPayload(id, true) },
+      { status: "deleted", version: opts?.versions?.[id] },
+    );
+  }
 }
 
 export async function markInflight(ids: string[]): Promise<Record<string, number>> {
@@ -336,6 +488,35 @@ export async function deleteOrphanEntries(ids: string[]): Promise<void> {
   const rows = await db.entries.bulkGet(ids);
   const orphans = rows.filter((r): r is PendingEntry => Boolean(r && !r.owner_user_id));
   await db.entries.bulkDelete(orphans.map((r) => r.id));
+}
+
+export async function persistServerEntries(items: EntryRead[], owner: string): Promise<void> {
+  const upsert = (existing: PendingEntry | undefined, item: EntryRead): PendingEntry | undefined => {
+    if (existing && existing.status !== "synced") return existing;
+    return {
+      ...item,
+      owner_user_id: owner,
+      status: "synced",
+      queued_at: existing?.queued_at ?? Date.now(),
+      attempts: 0,
+      local_rev: existing?.local_rev ?? 0,
+      version: item.version ?? existing?.version ?? undefined,
+    };
+  };
+  const test = getTestQueue();
+  if (test) {
+    for (const item of items) {
+      const next = upsert(test.entries.get(item.id), item);
+      if (next) test.entries.set(item.id, next);
+    }
+    return;
+  }
+  await db.transaction("rw", db.entries, async () => {
+    for (const item of items) {
+      const next = upsert(await db.entries.get(item.id), item);
+      if (next) await db.entries.put(next);
+    }
+  });
 }
 
 /** Drop only explicit tombstone ids. A missing list-page id never deletes a local copy. */

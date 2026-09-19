@@ -177,6 +177,20 @@ Browser (`http://127.0.0.1:5173/`, synthetic + `decrypt_n`, `Europe/Kiev`):
 - Offline: «Офлайн цель» / «на устройстве» / шапка «офлайн»; после `online` → «на сервере».
 - Экспорт: записей 1 · чат 8 · ошибок 0; цели «Лечь раньше» + «Офлайн цель»; memory disputed; action completed; feedback `tried_helped`.
 
+## Iteration F — queue snapshot, local cache, weekly review (2026-09-19)
+
+| Пункт | Реализовано | Unit | Интеграция | Браузер |
+|---|---|---|---|---|
+| Согласованный снимок `owner+id+payload+rev` до HTTP | да | да | — | да: IndexedDB `__queueIdbRace` payload B / version 8 |
+| Перенос server version 7→8 на оставшуюся pending-правку | да | да | — | остаётся |
+| Старые conflict/reject/error/delete-ack не портят новую ревизию | да | да | — | остаётся |
+| Удаление участвует в `local_rev` | да | да | — | Undo в полном сценарии волны 3 |
+| Tombstones при пустой очереди | да | — | — | остаётся |
+| Локальный снимок life; synced не пропадает без сервера | да | да | — | остаётся |
+| Конфликт: оба варианта + явный выбор | да | да (resolve) | — | остаётся |
+| Общий бюджет контекста / history / экспорт | нет | — | — | — |
+| Недельный обзор и цикл действия | нет | — | — | — |
+
 ## Next
 
-Iteration E is implemented and scenario-checked on this host stack. Optional: Docker file sharing for bind mounts, real LLM keys, undo click in the browser, second-account mid-encrypt UI.
+Wave 1 of F is in code. Waves 2–3: agent budget, honest export, weekly review, action cycle.

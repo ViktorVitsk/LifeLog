@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import CipherCard, { useDecryptedMap } from "../components/CipherCard";
 import WeeklyReviewCard from "../components/WeeklyReviewCard";
 import { useAuth } from "../context/AuthContext";
@@ -11,10 +11,12 @@ import { useMergedLife } from "../hooks/useMergedLife";
 import type { LifeActionRead, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
 import { resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
+import { ActionChangedError, commitFeedbackDecision, listLifeOps, resumeFeedbackOps } from "../lib/lifeOp";
+import { USER_OUTCOMES, ACTION_DECISIONS, outcomeSourceOf, type ActionDecision, type UserOutcome } from "../lib/feedbackOutcome";
 import { queueSyncLabel } from "../lib/mergeLife";
 import type { SaveScope } from "../lib/accountScope";
 import type { TStrings } from "../i18n/strings";
-import type { PendingLife } from "../db/offlineQueue";
+import type { LifeOp, PendingLife } from "../db/offlineQueue";
 import { calendarDayKey, getAccountTimeZone, shiftCivilDay, zonedWallTimeToUtc } from "../lib/dates";
 import { buildWeeklyReview } from "../lib/weeklyReview";
 
@@ -33,6 +35,15 @@ function outcomeLabel(kind: string, t: TStrings): string {
   if (kind === "not_suitable") return t.outcomeNotSuitable;
   if (kind === "tried_no_effect") return t.outcomeNoEffect;
   if (kind === "tried_helped") return t.outcomeHelped;
+  if (kind === "unevaluated") return t.outcomeUnevaluated;
+  return kind;
+}
+
+function decisionLabel(kind: string, t: TStrings): string {
+  if (kind === "continue") return t.lifeContinue;
+  if (kind === "change_plan") return t.lifeDecisionChangePlan;
+  if (kind === "complete") return t.lifeComplete;
+  if (kind === "stop") return t.lifeStop;
   return kind;
 }
 
@@ -56,8 +67,7 @@ export default function LifePage() {
     actionPlain,
     feedbackPlain,
   });
-  const pendingFeedback = useRef<Map<string, string>>(new Map());
-  const feedbackBusy = useRef(false);
+  const [ops, setOps] = useState<LifeOp[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [why, setWhy] = useState("");
@@ -69,6 +79,22 @@ export default function LifePage() {
   const [goalForAction, setGoalForAction] = useState("");
   const [resultMetric, setResultMetric] = useState("");
   const [reviewAt, setReviewAt] = useState(() => plusDays(7).slice(0, 10));
+
+  async function refreshOps() {
+    if (!userId) return;
+    setOps(await listLifeOps(userId));
+  }
+
+  useEffect(() => {
+    if (!userId) return;
+    void (async () => {
+      if (token && (typeof navigator === "undefined" || navigator.onLine)) {
+        await flushLifeQueue(token, userId).catch(() => undefined);
+      }
+      await resumeFeedbackOps(userId);
+      await refreshOps();
+    })();
+  }, [token, userId]);
 
   async function persist(
     kind: "goal" | "memory" | "action" | "feedback",
@@ -254,48 +280,51 @@ export default function LifePage() {
 
   async function onFeedback(
     action: LifeActionRead,
-    next: "continue" | "complete" | "stop",
-    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string; observed_on: string },
+    outcome: string,
+    decision: string,
+    fields: { what_changed: string; difficulty: string; side_effects: string; observed_on: string; plan_text: string },
+    existing?: LifeFeedbackRead,
   ) {
-    if (!kek || feedbackBusy.current) return;
+    if (!kek) return;
+    if (!outcome) {
+      setMsg(t.lifeNeedOutcome);
+      return;
+    }
+    if (!decision) {
+      setMsg(t.lifeNeedDecision);
+      return;
+    }
     if (!fields.what_changed.trim() && !fields.difficulty.trim() && !fields.side_effects.trim()) {
       setMsg(t.reviewFields);
       return;
     }
-    feedbackBusy.current = true;
-    const feedbackId = pendingFeedback.current.get(action.id) ?? newId();
-    pendingFeedback.current.set(action.id, feedbackId);
-    const outcome =
-      next === "stop" ? "not_suitable" : next === "complete" ? "tried_helped" : fields.tried ? "tried_helped" : "not_tried";
     try {
-      const blob = await encryptLifePayload(kek, {
-        tried: fields.tried,
-        what_changed: fields.what_changed.trim(),
-        difficulty: fields.difficulty.trim(),
-        side_effects: fields.side_effects.trim(),
-        continue_notes: next,
-        observed_on: fields.observed_on || null,
-        recorded_at: new Date().toISOString(),
+      await commitFeedbackDecision({
+        kek,
+        action,
+        outcome,
+        decision,
+        fields,
+        existingFeedback: existing,
+        planSnapshot: typeof actionPlain[action.id]?.chosen_try === "string"
+          ? String(actionPlain[action.id].chosen_try)
+          : typeof actionPlain[action.id]?.proposal === "string"
+            ? String(actionPlain[action.id].proposal)
+            : null,
       });
-      await persist(
-        "feedback",
-        { id: feedbackId, action_id: action.id, outcome_kind: outcome, encrypted_dek: blob.encrypted_dek, encrypted_content: blob.encrypted_content },
-        blob.scope,
-      );
-      try {
-        if (next === "complete") await writeAction(action, { state: "completed", review_at: null });
-        else if (next === "stop") await writeAction(action, { state: "stopped", review_at: null });
-        else await writeAction(action, { state: action.state === "accepted" ? "accepted" : "active" });
-        pendingFeedback.current.delete(action.id);
-        setMsg(t.lifeFeedbackSaved);
-      } catch (e) {
-        setMsg(t.lifeFeedbackPartial);
-        throw e;
+      if (token && userId && (typeof navigator === "undefined" || navigator.onLine)) {
+        await flushLifeQueue(token, userId).catch(() => undefined);
+        await resumeFeedbackOps(userId);
       }
+      await qc.invalidateQueries({ queryKey: ["life", userId] });
+      trigger();
+      await refreshOps();
+      setMsg(t.lifeFeedbackSaved);
     } catch (e) {
-      if ((e as Error).message !== t.lifeFeedbackPartial) setMsg((e as Error).message);
-    } finally {
-      feedbackBusy.current = false;
+      if (e instanceof ActionChangedError) setMsg(t.lifeActionRemoteChanged);
+      else if ((e as Error).message === "outcome_required") setMsg(t.lifeNeedOutcome);
+      else if ((e as Error).message === "decision_required") setMsg(t.lifeNeedDecision);
+      else setMsg((e as Error).message);
     }
   }
 
@@ -428,10 +457,12 @@ export default function LifePage() {
             t={t}
             outcomeLabel={outcomeLabel}
             feedback={bundle.feedback.filter((f) => f.action_id === a.id)}
+            feedbackPlain={feedbackPlain}
+            op={ops.find((item) => item.action_id === a.id && item.status !== "done")}
             extra={conflictPanel(a.id)}
             onReviewAt={(iso) => void writeAction(a, { review_at: iso })}
             onChangePlan={(text) => void onChangePlan(a, text)}
-            onFeedback={(next, fields) => void onFeedback(a, next, fields)}
+            onFeedback={(outcome, decision, fields, existing) => void onFeedback(a, outcome, decision, fields, existing)}
           />
         ))}
       </section>
@@ -523,6 +554,8 @@ function ActionRow({
   t,
   outcomeLabel,
   feedback,
+  feedbackPlain,
+  op,
   extra,
   onReviewAt,
   onChangePlan,
@@ -536,21 +569,35 @@ function ActionRow({
   outcomeLabel: (kind: string, t: TStrings) => string;
   extra?: ReactNode;
   feedback: LifeFeedbackRead[];
+  feedbackPlain: Record<string, Record<string, unknown>>;
+  op?: LifeOp;
   onReviewAt: (iso: string) => void;
   onChangePlan: (text: string) => void;
   onFeedback: (
-    next: "continue" | "complete" | "stop",
-    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string; observed_on: string },
+    outcome: string,
+    decision: string,
+    fields: { what_changed: string; difficulty: string; side_effects: string; observed_on: string; plan_text: string },
+    existing?: LifeFeedbackRead,
   ) => void;
 }) {
-  const [tried, setTried] = useState(true);
+  const [outcome, setOutcome] = useState<UserOutcome | "">("");
+  const [decision, setDecision] = useState<ActionDecision | "">("");
   const [what, setWhat] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [side, setSide] = useState("");
   const [observed, setObserved] = useState("");
   const [plan, setPlan] = useState("");
-  const fields = { tried, what_changed: what, difficulty, side_effects: side, observed_on: observed };
+  const [editing, setEditing] = useState<LifeFeedbackRead | undefined>();
+  const fields = { what_changed: what, difficulty, side_effects: side, observed_on: observed, plan_text: plan };
   const started = action.period_start ?? action.created_at;
+  const opLabel =
+    op?.status === "done"
+      ? t.lifeOpSynced
+      : op?.status === "feedback_acked" || op?.status === "action_conflict"
+        ? t.lifeOpPartial
+        : op
+          ? t.lifeOpOnDevice
+          : null;
   return (
     <div className="space-y-1 text-sm border-t border-zinc-800 pt-2">
       <div className="flex justify-between gap-2">
@@ -585,68 +632,115 @@ function ActionRow({
         </div>
         {badge}
       </div>
+      {opLabel && <div className="text-[11px] text-amber-200">{opLabel}</div>}
       {feedback.length > 0 && <div className="text-[11px] text-zinc-400">{t.lifeFeedbackHistory}</div>}
       {feedback
         .slice()
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-        .map((f) => (
-          <div key={f.id} className="text-[11px] text-zinc-400 rounded bg-zinc-950/60 border border-zinc-800 px-2 py-1">
-            <div>
-              {f.created_at.slice(0, 10)} · {outcomeLabel(f.outcome_kind, t)}
+        .map((f) => {
+          const plain = feedbackPlain[f.id];
+          const source = outcomeSourceOf(plain);
+          const shown = typeof plain?.outcome_kind === "string" ? String(plain.outcome_kind) : f.outcome_kind;
+          const decision = typeof plain?.decision === "string" ? String(plain.decision) : "";
+          return (
+            <div key={f.id} className="text-[11px] text-zinc-400 rounded bg-zinc-950/60 border border-zinc-800 px-2 py-1">
+              <div>
+                {f.created_at.slice(0, 10)} · {outcomeLabel(shown, t)}
+                {decision ? ` · ${decisionLabel(decision, t)}` : ""}
+              </div>
+              {source !== "user" && <div className="text-amber-200">{t.lifeOutcomeUnknown}</div>}
+              <CipherCard kek={kek} dek={f.encrypted_dek} ct={f.encrypted_content} fallback={f.outcome_kind}>
+                {(body) => (
+                  <div>
+                    {body.observed_on ? `${t.lifeObservedOn}: ${String(body.observed_on)} · ` : ""}
+                    {String(body.what_changed ?? "")}
+                    {body.difficulty ? ` · ${String(body.difficulty)}` : ""}
+                  </div>
+                )}
+              </CipherCard>
+              <button
+                type="button"
+                className="mt-1 text-[11px] underline text-zinc-300"
+                onClick={() => {
+                  setEditing(f);
+                  setOutcome(source === "user" && (USER_OUTCOMES as readonly string[]).includes(shown) ? (shown as UserOutcome) : "");
+                  setDecision(decision && (ACTION_DECISIONS as readonly string[]).includes(decision) ? (decision as ActionDecision) : "");
+                  setWhat(typeof plain?.what_changed === "string" ? String(plain.what_changed) : "");
+                  setDifficulty(typeof plain?.difficulty === "string" ? String(plain.difficulty) : "");
+                  setSide(typeof plain?.side_effects === "string" ? String(plain.side_effects) : "");
+                  setObserved(typeof plain?.observed_on === "string" ? String(plain.observed_on) : "");
+                }}
+              >
+                {t.lifeCorrectOutcome}
+              </button>
             </div>
-            <CipherCard kek={kek} dek={f.encrypted_dek} ct={f.encrypted_content} fallback={f.outcome_kind}>
-              {(plain) => (
-                <div>
-                  {plain.observed_on ? `${t.lifeObservedOn}: ${String(plain.observed_on)} · ` : ""}
-                  {String(plain.what_changed ?? "")}
-                  {plain.difficulty ? ` · ${String(plain.difficulty)}` : ""}
-                </div>
-              )}
-            </CipherCard>
-          </div>
-        ))}
-      {action.state !== "completed" && action.state !== "stopped" && (
-        <div className="space-y-1">
-          <div className="flex gap-1">
-            <input
-              className="flex-1 rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
-              placeholder={t.lifeChangePlan}
-              value={plan}
-              onChange={(e) => setPlan(e.target.value)}
-            />
-            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => { if (plan.trim()) onChangePlan(plan.trim()); setPlan(""); }}>
-              {t.save}
-            </button>
-          </div>
-          <label className="flex items-center gap-2 text-xs">
-            <input type="checkbox" checked={tried} onChange={(e) => setTried(e.target.checked)} />
-            {t.lifeTried}
-          </label>
-          <label className="block text-[11px] text-zinc-400">
-            {t.lifeObservedOn}
-            <input
-              type="date"
-              className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
-              value={observed}
-              onChange={(e) => setObserved(e.target.value)}
-            />
-          </label>
-          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeWhatChanged} value={what} onChange={(e) => setWhat(e.target.value)} />
-          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeDifficulty} value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />
-          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeSideEffects} value={side} onChange={(e) => setSide(e.target.value)} />
-          <div className="flex flex-wrap gap-1">
-            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onFeedback("continue", fields)}>
-              {t.lifeContinue}
-            </button>
-            <button type="button" className="text-[11px] px-2 py-1 rounded bg-indigo-600" onClick={() => onFeedback("complete", fields)}>
-              {t.lifeComplete}
-            </button>
-            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onFeedback("stop", fields)}>
-              {t.lifeStop}
-            </button>
-          </div>
+          );
+        })}
+      <div className="space-y-1">
+        <div className="flex gap-1">
+          <input
+            className="flex-1 rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
+            placeholder={t.lifeChangePlan}
+            value={plan}
+            onChange={(e) => setPlan(e.target.value)}
+          />
+          <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => { if (plan.trim()) onChangePlan(plan.trim()); setPlan(""); }}>
+            {t.save}
+          </button>
         </div>
-      )}
+        <label className="block text-[11px] text-zinc-400">
+          {t.lifeOutcome}
+          <select
+            className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value as UserOutcome | "")}
+          >
+            <option value="">{t.lifeOutcome}</option>
+            {USER_OUTCOMES.map((item) => (
+              <option key={item} value={item}>
+                {outcomeLabel(item, t)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-[11px] text-zinc-400">
+          {t.lifeDecision}
+          <select
+            className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
+            value={decision}
+            onChange={(e) => setDecision(e.target.value as ActionDecision | "")}
+          >
+            <option value="">{t.lifeDecision}</option>
+            {ACTION_DECISIONS.map((item) => (
+              <option key={item} value={item}>
+                {decisionLabel(item, t)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-[11px] text-zinc-400">
+          {t.lifeObservedOn}
+          <input
+            type="date"
+            className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
+            value={observed}
+            onChange={(e) => setObserved(e.target.value)}
+          />
+        </label>
+        <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeWhatChanged} value={what} onChange={(e) => setWhat(e.target.value)} />
+        <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeDifficulty} value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />
+        <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeSideEffects} value={side} onChange={(e) => setSide(e.target.value)} />
+        <button
+          type="button"
+          className="text-[11px] px-2 py-1 rounded bg-indigo-600"
+          onClick={() => {
+            onFeedback(outcome, decision, fields, editing);
+            setEditing(undefined);
+          }}
+        >
+          {editing ? t.lifeCorrectOutcome : t.lifeSaveResult}
+        </button>
+      </div>
       {extra}
     </div>
   );

@@ -194,6 +194,8 @@ export async function assembleAllowedPersonalContext(args: {
       id: f.id,
       action_id: f.action_id,
       outcome_kind: f.outcome_kind,
+      outcome_source: body?.outcome_source === "user" ? "user" : "unknown",
+      decision: typeof body?.decision === "string" ? body.decision : null,
       version: f.version ?? null,
       recorded_at: f.created_at ?? f.updated_at ?? null,
       observed_on: typeof body?.observed_on === "string" ? body.observed_on : null,

@@ -64,4 +64,5 @@ class FeedbackOutcome(StrEnum):
     TRIED_NO_EFFECT = "tried_no_effect"
     TRIED_HELPED = "tried_helped"
     TRIED_HURT = "tried_hurt"
+    UNEVALUATED = "unevaluated"
     OTHER = "other"

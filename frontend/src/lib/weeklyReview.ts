@@ -57,6 +57,8 @@ export interface WeekSlice {
     id: string;
     action_id: string;
     outcome_kind: string;
+    outcome_source?: "user" | "unknown";
+    decision?: string;
     recorded_at?: string | null;
     observed_on?: string | null;
     in_period: boolean;
@@ -169,6 +171,8 @@ function sliceWeek(args: {
       id: f.id,
       action_id: f.action_id,
       outcome_kind: f.outcome_kind,
+      outcome_source: body?.outcome_source === "user" ? ("user" as const) : ("unknown" as const),
+      decision: typeof body?.decision === "string" ? body.decision : undefined,
       recorded_at: recorded,
       observed_on: observed,
       in_period,

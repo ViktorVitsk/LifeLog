@@ -75,6 +75,23 @@ export interface PendingLife {
   server_snapshot?: Record<string, unknown>;
 }
 
+export type LifeOpStatus = "local" | "feedback_acked" | "done" | "action_conflict";
+
+export interface LifeOp {
+  id: string;
+  owner_user_id: string;
+  session_id: number;
+  kind: "feedback_and_action";
+  status: LifeOpStatus;
+  feedback_id: string;
+  action_id: string;
+  expected_action_version?: number | null;
+  intent_key: string;
+  feedback_payload: Record<string, unknown>;
+  action_payload: Record<string, unknown> | null;
+  created_at: number;
+}
+
 export class LifeLogDB extends Dexie {
   entries!: EntityTable<PendingEntry, "id">;
   chat_turns!: EntityTable<StoredChatTurn, "id">;
@@ -82,6 +99,7 @@ export class LifeLogDB extends Dexie {
   pinned_charts!: EntityTable<StoredPinnedChart, "id">;
   kek_verifiers!: EntityTable<StoredKekVerifier, "owner_user_id">;
   life_queue!: EntityTable<PendingLife, "id">;
+  life_ops!: EntityTable<LifeOp, "id">;
 
   constructor() {
     super("lifelog");
@@ -111,6 +129,9 @@ export class LifeLogDB extends Dexie {
       pinned_charts: "id, created_at, owner_user_id",
       kek_verifiers: "owner_user_id",
       life_queue: "id, kind, status, owner_user_id, queued_at",
+    });
+    this.version(6).stores({
+      life_ops: "id, owner_user_id, action_id, status",
     });
   }
 }

@@ -101,6 +101,10 @@ def _row_values(item: EntrySyncItem, user_id: UUID, account_tz: str) -> dict:
     }
 
 
+def _existing_entries_query(incoming_ids: list[UUID], user_id: UUID):
+    return select(Entry).where(Entry.id.in_(incoming_ids), Entry.user_id == user_id)
+
+
 @router.post("/sync", response_model=EntrySyncResponse)
 async def sync_entries(
     payload: EntrySyncRequest,
@@ -122,9 +126,7 @@ async def sync_entries(
     except ValueError:
         account_tz = DEFAULT_TIMEZONE
     incoming_ids = [item.id for item in payload.entries]
-    existing_rows = (
-        await db.execute(select(Entry).where(Entry.id.in_(incoming_ids)))
-    ).scalars().all()
+    existing_rows = (await db.execute(_existing_entries_query(incoming_ids, user_id))).scalars().all()
     existing_by_id = {row.id: _entry_as_dict(row) for row in existing_rows}
 
     owned_skills = set(

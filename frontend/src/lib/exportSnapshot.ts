@@ -1,5 +1,6 @@
 import { exportDecryptedTurns, type ExportedChatTurn } from "../agent/chatStore.ts";
 import { db, type LifeLogDB, type LifeOp, type PendingEntry, type PendingLife } from "../db/offlineQueue.ts";
+import { listEntries as listOutboxEntries, listLife as listOutboxLife, listOps as listOutboxOps } from "../db/outbox.ts";
 import type { EntryRead, LifeBundle } from "./api.ts";
 import { decryptEntry } from "./crypto.ts";
 import { collectArrayPages } from "./paging.ts";
@@ -237,9 +238,9 @@ export async function buildFullExport(args: {
   }
   assertExportLive(args.userId, sessionId);
 
-  const localEntries = sources.localEntries ?? (await store.entries.toArray());
-  const localLife = sources.localLife ?? (await store.life_queue.toArray());
-  const lifeOps = sources.lifeOps ?? (await store.life_ops.toArray());
+  const localEntries = sources.localEntries ?? (await listOutboxEntries(store));
+  const localLife = sources.localLife ?? (await listOutboxLife(store));
+  const lifeOps = sources.lifeOps ?? (await listOutboxOps(store));
   assertExportLive(args.userId, sessionId);
 
   const tombstoneIds = new Set(entryTombs.map((item) => item.id));

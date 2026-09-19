@@ -23,7 +23,8 @@ type LifeQueueRow = {
 async function latestLocalLife(page: Page, kind: string): Promise<LifeQueueRow> {
   return page.evaluate(async (wantedKind) => {
     const { db } = await import("/src/db/offlineQueue.ts");
-    const rows = (await db.life_queue.toArray())
+    const { listLife } = await import("/src/db/outbox.ts");
+    const rows = (await listLife(db))
       .filter((row) => row.kind === wantedKind)
       .sort((a, b) => b.queued_at - a.queued_at);
     if (!rows[0]) throw new Error(`No local ${wantedKind} row`);

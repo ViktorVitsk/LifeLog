@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useMemo } from "react";
 import { getSessionToken, useAuth } from "../context/AuthContext";
 import { db, persistServerEntries, type PendingEntry } from "../db/offlineQueue";
+import { listEntries } from "../db/outbox";
 import { api, AuthError, type EntryRead } from "../lib/api";
 import { mergeEntryStreams } from "../sync/mergeEntries";
 
@@ -54,7 +55,7 @@ export function useEntries() {
     },
   });
 
-  const local = useLiveQuery(() => db.entries.toArray(), [], [] as PendingEntry[]);
+  const local = useLiveQuery(() => listEntries(db), [], [] as PendingEntry[]);
 
   const merged = useMemo<MergedEntry[]>(() => {
     const plan = mergeEntryStreams(local ?? [], serverQuery.data ?? [], userId);

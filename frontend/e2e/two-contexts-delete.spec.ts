@@ -14,7 +14,8 @@ type LifeRow = { id: string; status: string; kind: string };
 async function lifeQueue(page: Page): Promise<LifeRow[]> {
   return page.evaluate(async () => {
     const { db } = await import("/src/db/offlineQueue.ts");
-    const rows = await db.life_queue.toArray();
+    const { listLife } = await import("/src/db/outbox.ts");
+    const rows = await listLife(db);
     return rows.map((row) => ({ id: row.id, status: row.status, kind: row.kind }));
   });
 }

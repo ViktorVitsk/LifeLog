@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { db, type PendingLife } from "../db/offlineQueue";
+import { listOwnedLife } from "../db/outbox";
 import { api, type LifeBundle } from "../lib/api";
 import { persistServerLife } from "../lib/lifeQueue";
 import { mergeLifeBundle, nextDueAt } from "../lib/mergeLife";
@@ -21,7 +22,7 @@ export function useMergedLife() {
     refetchOnMount: "always",
   });
   const local = useLiveQuery(
-    () => (userId ? db.life_queue.filter((row) => row.owner_user_id === userId).toArray() : []),
+    () => (userId ? listOwnedLife(db, userId) : []),
     [userId],
     [] as PendingLife[],
   );

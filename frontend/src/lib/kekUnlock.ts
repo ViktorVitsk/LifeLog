@@ -1,4 +1,5 @@
 import { db } from "../db/offlineQueue";
+import { listEntries } from "../db/outbox";
 import { checkKekVerifier, tryUnwrapDek, wrapKekVerifier } from "../lib/crypto";
 import { api, type MeResponse } from "../lib/api";
 
@@ -39,7 +40,7 @@ async function bootstrapVerifier(kek: CryptoKey, userId: string, token: string):
 }
 
 async function localOwnedSample(userId: string) {
-  const owned = await db.entries.where("owner_user_id").equals(userId).limit(1).first();
+  const owned = (await listEntries(db)).find((row) => row.owner_user_id === userId);
   if (owned) return owned;
   return undefined;
 }

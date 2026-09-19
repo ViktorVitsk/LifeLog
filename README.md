@@ -85,6 +85,21 @@ docker compose up --build
 First startup: Alembic runs `upgrade head` automatically before uvicorn boots
 (the backend container's command chains them together).
 
+### Deployment boundary: localhost only
+
+`docker-compose.yml` is intentionally a development profile, not a production
+deployment. It runs Vite's dev server, starts uvicorn with `--reload`, installs
+npm packages at container startup, bind-mounts source code, and provides
+development defaults for PostgreSQL and `JWT_SECRET`.
+
+Do not expose this stack to the public internet or an untrusted LAN. It has no
+TLS termination, hardened static-file server, shared rate-limit store,
+token-revocation service, managed secret rotation, or production backup policy.
+Set a long random `JWT_SECRET` even on localhost. A production profile is not
+provided because LifeLog's supported deployment model is a single owner on the
+same machine; changing that boundary requires a separate security design and
+deployment review.
+
 ---
 
 ## Phase 2 acceptance (DoD)

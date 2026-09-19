@@ -1,5 +1,24 @@
 import { jwtSub } from "./accountScope.ts";
 
+export function jwtSubjectMatches(token: string, userId: string): boolean {
+  const sub = jwtSub(token);
+  if (!sub) return false;
+  return sub === userId;
+}
+
+export function authErrorStillCurrent(args: {
+  opGen: number;
+  currentGen: number;
+  expectedUserId: string;
+  currentUserId: string | null;
+}): boolean {
+  return (
+    args.opGen === args.currentGen &&
+    Boolean(args.expectedUserId) &&
+    args.currentUserId === args.expectedUserId
+  );
+}
+
 export function authResultStillCurrent(args: {
   token: string;
   expectedUserId: string;
@@ -7,8 +26,6 @@ export function authResultStillCurrent(args: {
   currentGen: number;
   currentUserId: string | null;
 }): boolean {
-  if (args.opGen !== args.currentGen) return false;
-  if (!args.expectedUserId || args.currentUserId !== args.expectedUserId) return false;
-  const sub = jwtSub(args.token);
-  return !sub || sub === args.expectedUserId;
+  if (!authErrorStillCurrent(args)) return false;
+  return jwtSubjectMatches(args.token, args.expectedUserId);
 }

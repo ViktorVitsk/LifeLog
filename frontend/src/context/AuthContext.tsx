@@ -22,7 +22,7 @@ import {
   setEncryptAllowed,
 } from "../lib/accountScope";
 import { establishKek, KeyUnverifiedError } from "../lib/kekUnlock";
-import { authResultStillCurrent } from "../lib/authSession";
+import { authErrorStillCurrent, authResultStillCurrent } from "../lib/authSession";
 import { setAccountTimeZone } from "../lib/dates";
 
 const SESSION_STORAGE_KEY = "lifelog.session";
@@ -417,7 +417,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!isAuthError(e)) return;
           }
         }
-        if (gen === authGen.current) markSessionExpired();
+        if (
+          authErrorStillCurrent({
+            opGen: gen,
+            currentGen: authGen.current,
+            expectedUserId: expectedUserId ?? "",
+            currentUserId: readPersisted()?.userId ?? null,
+          })
+        ) {
+          markSessionExpired();
+        }
       })().finally(() => {
         recovering.current = false;
       });
@@ -454,7 +463,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           applyToken(res.access_token, gen);
         })
         .catch((e) => {
-          if (isAuthError(e)) markSessionExpired();
+          if (!isAuthError(e)) return;
+          if (
+            !authErrorStillCurrent({
+              opGen: gen,
+              currentGen: authGen.current,
+              expectedUserId: expectedUserId ?? "",
+              currentUserId: readPersisted()?.userId ?? null,
+            })
+          ) {
+            return;
+          }
+          markSessionExpired();
         });
     }, delay);
     return () => window.clearTimeout(timer);

@@ -90,6 +90,8 @@
 - PBKDF2 остаётся на 100k для совместимости. Version 2 не активирована; для неё сначала нужен opaque bridge старого KEK под новым KEK, иначе существующие `encrypted_dek` станут недоступны.
 - JWT по-прежнему не имеет server-side revoke list; абсолютный потолок ограничивает продление, но не отзывает уже выданный токен.
 - `docker-compose.yml` официально остаётся localhost-only development profile и не должен публиковаться в internet/untrusted LAN.
+- `toEntryPayload()` по-прежнему не переносит `goal_id` в sync payload; это зафиксировано characterization-тестом и не входит в outbox-релиз.
+- Legacy Dexie stores `entries` / `life_queue` / `life_ops` остаются в схеме v8 (copy-only). Их удаление — отдельная последующая schema version после подтверждённого релиза.
 
 ## Changelog
 
@@ -123,3 +125,13 @@
 - **2.6 checked (docs):** поддерживаемая граница развёртывания зафиксирована как localhost-only; dev compose прямо запрещено считать production-профилем.
 - **Wave 2 final matrix checked:** `tsc` passed; frontend unit 142/142, component 2/2; Ruff passed; backend unit 44 passed + 6 live skipped; live mode 50/50; Playwright E2E 5/5; Alembic current `0009 (head)`.
 - **Run note:** первая live-попытка ошибочно попала в старый uvicorn на занятом `:8001` и дала 2 ожидаемых несовпадения старого API; изолированный новый процесс на `:8011` прошёл 50/50.
+
+### Iteration I — Wave 3 progress
+
+- **3.1 checked (design):** единый Dexie `outbox` с entity/operation union, coordinator-строками и двухуровневым ack; `goal_id` omission в `toEntryPayload()` зафиксирован characterization-тестом и не исправлялся.
+- **3.2 checked (migration):** Dexie v8 copy-only переносит `entries` / `life_queue` / `life_ops` в `outbox`, сохраняет ISO/epoch даты, historical operation rev и legacy stores; abort оставляет читаемую v7, старая вкладка получает `versionchange`.
+- **3.3 checked (runtime):** claim snapshot в Dexie-транзакции до сети; один `flushOutbox` под существующим `withSyncLock`; backend endpoints не изменены.
+- **3.4 checked (coordinator):** `feedback_and_action` / `feedback_correction` живут в operation-строках; exact conflict/rejected на feedback или action → `action_conflict`; `submission_id` после `done` не создаёт новую запись.
+- **3.5 checked (cutover):** merge/export/tombstones/liveQuery читают outbox; runtime больше не пишет в legacy tables; очистка stores отложена.
+- **Wave 3 final matrix checked:** `tsc` passed; frontend unit 149/149, component 3/3; Ruff passed; backend unit 44 passed + 6 live skipped; live mode 50/50 на изолированном `:8011`; Playwright E2E 5/5 на `:5173`.
+- **Run note:** host `:8001` всё ещё отдаёт старый API без `kdf_version`; live-матрица, как в волне 2, прогонялась на новом uvicorn `:8011`. Chromium CT покрывает v7→v8 copy, abort-upgrade и `versionchange` старой вкладки.

@@ -1,5 +1,5 @@
-import { applyEntryResult, db, toEntryPayload, type EntrySendSnapshot, type LifeKind, type PendingEntry, type PendingLife } from "../db/offlineQueue.ts";
-import { claimEntityRows } from "../db/outbox.ts";
+import { applyEntryResult, db, toEntryPayload, type EntrySendSnapshot, type LifeKind, type PendingEntry, type PendingLife, type QueueStatus } from "../db/offlineQueue.ts";
+import { claimEntityRows, getEntry, getLife } from "../db/outbox.ts";
 import { api, isAuthError, isNetworkError, type LifeSyncResponse } from "./api.ts";
 import {
   applyLifeResult,
@@ -57,14 +57,22 @@ async function flushKind(
   return resp.saved.length;
 }
 
+async function flushLifeKindsTracked(
+  token: string,
+  snapshots: LifeSendSnapshot[],
+  tally: { saved: number },
+): Promise<void> {
+  if (!snapshots.length) return;
+  tally.saved += await flushKind("goal", snapshots, (items) => api.syncLifeGoals(token, items as never));
+  tally.saved += await flushKind("memory", snapshots, (items) => api.syncLifeMemory(token, items as never));
+  tally.saved += await flushKind("action", snapshots, (items) => api.syncLifeActions(token, items as never));
+  tally.saved += await flushKind("feedback", snapshots, (items) => api.syncLifeFeedback(token, items as never));
+}
+
 export async function flushLifeKinds(token: string, snapshots: LifeSendSnapshot[]): Promise<number> {
-  if (!snapshots.length) return 0;
-  let saved = 0;
-  saved += await flushKind("goal", snapshots, (items) => api.syncLifeGoals(token, items as never));
-  saved += await flushKind("memory", snapshots, (items) => api.syncLifeMemory(token, items as never));
-  saved += await flushKind("action", snapshots, (items) => api.syncLifeActions(token, items as never));
-  saved += await flushKind("feedback", snapshots, (items) => api.syncLifeFeedback(token, items as never));
-  return saved;
+  const tally = { saved: 0 };
+  await flushLifeKindsTracked(token, snapshots, tally);
+  return tally.saved;
 }
 
 async function applyEntrySnapshots(
@@ -83,6 +91,10 @@ async function applyEntrySnapshots(
     else if (result.status === "conflict" || result.status === "rejected") failed += 1;
   }
   return { saved, failed, deleted };
+}
+
+function alreadyAcked(status: QueueStatus | undefined): boolean {
+  return status === "synced" || status === "conflict" || status === "rejected";
 }
 
 function asLifeSnapshot(row: {
@@ -106,7 +118,7 @@ function asLifeSnapshot(row: {
 }
 
 export async function flushOutboxUnlocked(token: string, userId: string): Promise<OutboxFlushResult> {
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return { attempted: 0, saved: 0, failed: 0, error: "offline" };
   }
   const claimed = await claimEntityRows(db, userId, ["entry", "goal", "memory", "action", "feedback"]);
@@ -129,7 +141,7 @@ export async function flushOutboxUnlocked(token: string, userId: string): Promis
     } as PendingEntry),
   }));
 
-  let saved = 0;
+  const tally = { saved: 0 };
   let failed = 0;
   let deleted = 0;
   let error: string | undefined;
@@ -141,30 +153,37 @@ export async function flushOutboxUnlocked(token: string, userId: string): Promis
         token,
       );
       const counts = await applyEntrySnapshots(entrySnaps, resp.results ?? []);
-      saved += counts.saved;
+      tally.saved += counts.saved;
       failed += counts.failed;
       deleted += counts.deleted;
       error = resp.results?.find((row) => row.status === "conflict" || row.status === "rejected")?.reason ?? undefined;
     }
-    saved += await flushLifeKinds(token, lifeRows);
+    await flushLifeKindsTracked(token, lifeRows, tally);
   } catch (e) {
     if (isNetworkError(e)) {
-      return { attempted: claimed.length, saved, failed, deleted, error: "offline" };
+      return { attempted: claimed.length, saved: tally.saved, failed, deleted, error: "offline" };
     }
     if (isAuthError(e)) {
-      return { attempted: claimed.length, saved, failed, deleted, error: "auth" };
+      return { attempted: claimed.length, saved: tally.saved, failed, deleted, error: "auth" };
     }
     const msg = (e as Error).message ?? "sync failed";
+    let marked = 0;
     for (const snap of entrySnaps) {
+      const row = await getEntry(db, snap.id);
+      if (!row || alreadyAcked(row.status)) continue;
       await applyEntryResult(snap, { status: "error", reason: msg });
+      marked += 1;
     }
     for (const snap of lifeRows) {
+      const row = await getLife(db, snap.id);
+      if (!row || alreadyAcked(row.status)) continue;
       await applyLifeResult(snap, { status: "error", reason: msg });
+      marked += 1;
     }
-    return { attempted: claimed.length, saved: 0, failed: claimed.length, deleted, error: msg };
+    return { attempted: claimed.length, saved: tally.saved, failed: failed + marked, deleted, error: msg };
   }
 
-  return { attempted: claimed.length, saved, failed, deleted, error };
+  return { attempted: claimed.length, saved: tally.saved, failed, deleted, error };
 }
 
 export async function flushOutbox(token: string, userId: string): Promise<OutboxFlushResult> {

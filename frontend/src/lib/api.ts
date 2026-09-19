@@ -1,6 +1,6 @@
-import { collectLifePages } from "./lifePaging";
+import { collectLifePages } from "./lifePaging.ts";
 
-const rawBase = import.meta.env.VITE_API_URL;
+const rawBase = import.meta.env?.VITE_API_URL;
 /** Empty = same origin (Vite proxies `/api` → LifeLog backend). */
 const BASE_URL = (typeof rawBase === "string" ? rawBase.trim() : "").replace(/\/$/, "");
 
@@ -10,9 +10,11 @@ const BASE_URL = (typeof rawBase === "string" ? rawBase.trim() : "").replace(/\/
  * later" and keep showing cached data instead of crashing the UI.
  */
 export class NetworkError extends Error {
-  constructor(message: string, public readonly cause?: unknown) {
+  readonly cause?: unknown;
+  constructor(message: string, cause?: unknown) {
     super(message);
     this.name = "NetworkError";
+    this.cause = cause;
   }
 }
 
@@ -25,12 +27,11 @@ export function isNetworkError(e: unknown): e is NetworkError {
  * Bearer). Callers must not retry: a new access token is required.
  */
 export class AuthError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number = 401,
-  ) {
+  readonly status: number;
+  constructor(message: string, status: number = 401) {
     super(message);
     this.name = "AuthError";
+    this.status = status;
   }
 }
 

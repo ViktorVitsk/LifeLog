@@ -101,8 +101,12 @@ export default function SettingsPage() {
           .join(" · "),
       );
     } catch (e) {
-      if (e instanceof ExportCancelledError) setMsg(t.exportCancelled);
-      else setMsg((e as Error).message);
+      const cancelled = e instanceof ExportCancelledError || (e as { name?: string }).name === "ExportCancelledError";
+      const shown = cancelled ? t.exportCancelled : (e as Error).message;
+      setMsg(shown);
+      if (import.meta.env.DEV) {
+        (window as Window & { __lastExportError?: string }).__lastExportError = shown;
+      }
     } finally {
       setBusy(null);
     }

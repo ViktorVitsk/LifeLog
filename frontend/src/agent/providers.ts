@@ -57,6 +57,10 @@ export async function completeChat(args: {
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
 }): Promise<{ content: string; tool_calls: ToolCall[] }> {
+  if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    (window as Window & { __lastChatRequest?: { messages: ChatCompletionMessage[]; at: number } }).__lastChatRequest =
+      { messages: args.messages, at: Date.now() };
+  }
   if (args.settings.provider === "synthetic") {
     const handler = syntheticHandler ?? defaultSyntheticHandler;
     let emitted = false;
@@ -182,4 +186,13 @@ async function readOpenAiStream(
     }));
 
   return { content, tool_calls };
+}
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  const w = window as Window & {
+    __setSyntheticChatHandler?: typeof setSyntheticChatHandler;
+    __delayedSyntheticHandler?: typeof delayedSyntheticHandler;
+  };
+  w.__setSyntheticChatHandler = setSyntheticChatHandler;
+  w.__delayedSyntheticHandler = delayedSyntheticHandler;
 }

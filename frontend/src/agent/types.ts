@@ -149,6 +149,11 @@ export interface ThreadMessage {
     policy: ContextPolicy;
     unique_decrypted: number;
     sent_plaintext_to_model: boolean;
+    revealed?: { kind: string; id: string }[];
+    omitted?: { kind: string; id: string; reason: string }[];
+    period?: { start?: string; end?: string };
+    allow_plaintext?: boolean;
+    sent_counts?: { goals: number; memory: number; actions: number; feedback: number; entries: number };
     tools: {
       name: string;
       entry_ids: string[];

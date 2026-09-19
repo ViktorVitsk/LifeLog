@@ -48,6 +48,9 @@ export interface ToolRuntime {
   lifeProposals?: LifeProposal[];
   lifeBundle?: LifeBundle;
   reviewPeriod?: "1d" | "7d" | "envelope";
+  sessionId?: number;
+  selectedGoalId?: string | null;
+  selectedActionId?: string | null;
 }
 
 function asChartSpec(args: Record<string, unknown>, envelope: ContextEnvelope): ChartSpec {
@@ -100,7 +103,7 @@ export async function executeTool(
     return modelWriteBlockedResult(name);
   }
   if (rt.mode && !isToolAllowed(rt.mode, name)) {
-    return { error: "tool_not_allowed", tool: name };
+    throw new Error(`tool_not_allowed:${name}`);
   }
 
   const parsed = parseJsonObject(rawArgs.trim() ? rawArgs : "{}");
@@ -223,7 +226,7 @@ export async function executeTool(
           out.push({
             ...meta,
             decrypt_skipped: wantDecrypt
-              ? remainingDecryptBudget(rt.budget) <= 0 && !rt.budget.decryptedEntryIds.has(e.id)
+              ? remainingDecryptBudget(rt.budget) <= 0 && !rt.budget.decryptedKeys.has(`entry:${e.id}`)
                 ? "budget"
                 : rt.envelope.allowDecrypt
                   ? "not_requested_or_duplicate_budget"
@@ -305,7 +308,7 @@ export async function executeTool(
       return { proposed: card, hint: "Card only. Persistence waits for the user." };
     }
     default:
-      return { error: `Unknown tool ${name}` };
+      throw new Error(`unknown_tool:${name}`);
   }
 }
 

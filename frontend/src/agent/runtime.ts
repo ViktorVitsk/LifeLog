@@ -2,6 +2,7 @@ import { completeChat } from "./providers.ts";
 import { buildTodaySnapshot } from "./snapshot.ts";
 import { normalizeProposal } from "./normalizeProposal.ts";
 import {
+  emptyBudget,
   filterEntriesForPolicy,
   finishRunAudit,
   policyPromptLine,
@@ -14,7 +15,10 @@ import type { ChatCompletionMessage, ChartSpec, ChatMode, LifeProposal, LlmSetti
 import type { RunContextAudit } from "./contextEnvelope.ts";
 import { buildReviewBriefing, modeSystemPrompt, stripUnknownIds, toolsForMode } from "./modes.ts";
 import { assembleAllowedPersonalContext } from "../lib/personalContext.ts";
-import { getAccountTimeZone, startOfLocalDay } from "../lib/dates.ts";
+import { getAccountTimeZone, startOfLocalDay, startOfLocalDayBack } from "../lib/dates.ts";
+import { buildWeeklyReview } from "../lib/weeklyReview.ts";
+import { historyForPolicy } from "./historySanitize.ts";
+import { isCurrentSession, isEncryptAllowed } from "../lib/accountScope.ts";
 
 function markTool(
   trace: AgentRunResult["tools"],
@@ -44,15 +48,22 @@ export interface AgentRunResult {
   contextAudit: RunContextAudit;
 }
 
+function runStillLive(signal: AbortSignal | undefined, sessionId?: number): boolean {
+  if (signal?.aborted) return false;
+  if (sessionId == null) return true;
+  if (!isCurrentSession(sessionId)) return false;
+  if (!isEncryptAllowed()) return false;
+  return true;
+}
+
 export function ensureAgentBudget(rt: ToolRuntime, settings: LlmSettings): ContextBudget {
-  if (rt.budget) return rt.budget;
+  if (rt.budget) {
+    rt.budget.decryptedKeys ??= new Set();
+    rt.budget.decryptedEntryIds ??= new Set();
+    return rt.budget;
+  }
   const envelope = resolveContextEnvelope(settings);
-  const budget: ContextBudget = {
-    envelope,
-    decryptedEntryIds: new Set(),
-    audit: [],
-    provider: settings.provider,
-  };
+  const budget = emptyBudget(envelope, settings.provider);
   rt.envelope = envelope;
   rt.budget = budget;
   return budget;
@@ -71,13 +82,11 @@ export async function runAgent(args: {
 }): Promise<AgentRunResult> {
   const envelope = args.rt.envelope ?? resolveContextEnvelope(args.settings);
   args.rt.envelope = envelope;
-  if (!args.rt.budget) {
-    args.rt.budget = {
-      envelope,
-      decryptedEntryIds: new Set(),
-      audit: [],
-      provider: args.settings.provider,
-    };
+  const budget = ensureAgentBudget(args.rt, args.settings);
+  budget.envelope = envelope;
+
+  if (!runStillLive(args.signal, args.rt.sessionId)) {
+    throw new DOMException("Aborted", "AbortError");
   }
 
   const mode = args.mode ?? args.rt.mode ?? "record";
@@ -91,12 +100,23 @@ export async function runAgent(args: {
     habits: args.rt.habits,
     locale: args.locale,
   });
+  const selectedActionId =
+    args.rt.selectedActionId ?? args.rt.dueActionIds?.[0] ?? args.rt.lifeBundle?.due_action_ids?.[0] ?? null;
+  const selectedGoalId =
+    args.rt.selectedGoalId ??
+    args.rt.lifeBundle?.actions.find((a) => a.id === selectedActionId)?.goal_id ??
+    args.rt.lifeBundle?.goals.find((g) => g.state === "active" || g.state === "accepted")?.id ??
+    null;
   const personal = await assembleAllowedPersonalContext({
     bundle: args.rt.lifeBundle,
     entries: scoped,
     policy: envelope.policy,
     kek: args.rt.kek,
     decryptLimit: args.settings.decrypt_n,
+    budget,
+    selectedGoalId,
+    selectedActionId,
+    period: { start: envelope.windowStart.toISOString(), end: envelope.windowEnd.toISOString() },
   });
   const known = new Set<string>([
     ...personal.allIds,
@@ -114,13 +134,25 @@ export async function runAgent(args: {
     period === "1d"
       ? todayStart
       : period === "7d"
-        ? new Date(todayStart.getTime() - 6 * 24 * 3600_000)
+        ? startOfLocalDayBack(envelope.windowEnd, 6, tz)
         : envelope.windowStart;
   const windowStart = new Date(Math.max(periodStart.getTime(), envelope.windowStart.getTime()));
   const periodEntries = scoped.filter((e) => {
     const t = Date.parse(e.timestamp);
     return Number.isFinite(t) && t >= windowStart.getTime() && t <= envelope.windowEnd.getTime();
   });
+  const weekly =
+    mode === "review" && period === "7d"
+      ? buildWeeklyReview({
+          now: envelope.windowEnd,
+          timeZone: tz,
+          entries: periodEntries,
+          bundle: args.rt.lifeBundle ?? { goals: [], memory: [], actions: [], feedback: [], due_action_ids: [] },
+          goalPlain: Object.fromEntries(personal.sent.goals.map((g) => [String(g.id), g])),
+          actionPlain: Object.fromEntries(personal.sent.actions.map((a) => [String(a.id), a])),
+          feedbackPlain: Object.fromEntries(personal.sent.feedback.map((f) => [String(f.id), f])),
+        })
+      : null;
   const briefing =
     mode === "review"
       ? buildReviewBriefing({
@@ -149,20 +181,23 @@ export async function runAgent(args: {
             result_metric: typeof a.result_metric === "string" ? a.result_metric : null,
             review_at: typeof a.review_at === "string" ? a.review_at : null,
           })),
-          feedback: (args.rt.lifeBundle?.feedback ?? []).map((f) => ({
-            action_id: f.action_id,
-            outcome_kind: f.outcome_kind,
+          feedback: personal.sent.feedback.map((f) => ({
+            action_id: String(f.action_id ?? ""),
+            outcome_kind: String(f.outcome_kind ?? ""),
+            recorded_at: typeof f.recorded_at === "string" ? f.recorded_at : undefined,
+            observed_on: typeof f.observed_on === "string" ? f.observed_on : undefined,
           })),
         })
       : null;
+  const history = historyForPolicy(args.history, envelope.policy, args.userText);
   const messages: ChatCompletionMessage[] = [
     {
       role: "system",
-      content: `${buildSystemPrompt(args.locale, mode)}\n\n${policy}\n\nToday snapshot (open metrics only):\n${JSON.stringify(snapshot)}\n\nAllowed personal context (cite only these ids):\n${personal.promptBlock}${
+      content: `${buildSystemPrompt(args.locale, mode)}\n\n${policy}\n\nToday snapshot (open metrics only):\n${JSON.stringify(snapshot)}\n\nAllowed personal context (cite only these ids):\n${personal.promptBlock}\n\nLaunch context (ids and reasons only, no decrypted payloads):\n${JSON.stringify(personal.manifest)}${
         briefing ? `\n\nDeterministic review briefing:\n${JSON.stringify(briefing)}` : ""
-      }`,
+      }${weekly ? `\n\nDeterministic weekly review (numbers from stored fields only):\n${JSON.stringify(weekly)}` : ""}`,
     },
-    ...args.history,
+    ...history,
     { role: "user", content: args.userText },
   ];
 
@@ -171,14 +206,23 @@ export async function runAgent(args: {
   const toolTrace: AgentRunResult["tools"] = [];
 
   for (let round = 0; round < 6; round++) {
+    if (!runStillLive(args.signal, args.rt.sessionId)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     const result = await completeChat({
       settings: args.settings,
       messages,
       tools,
       stream,
       signal: args.signal,
-      onDelta: args.onDelta,
+      onDelta: (text) => {
+        if (!runStillLive(args.signal, args.rt.sessionId)) return;
+        args.onDelta?.(text);
+      },
     });
+    if (!runStillLive(args.signal, args.rt.sessionId)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     assistantText += result.content || "";
 
     let calls: ToolCall[] = result.tool_calls;
@@ -207,6 +251,9 @@ export async function runAgent(args: {
     });
 
     for (const call of calls) {
+      if (!runStillLive(args.signal, args.rt.sessionId)) {
+        throw new DOMException("Aborted", "AbortError");
+      }
       const name = call.function.name;
       args.onTool?.(name, "running");
       toolTrace.push({ name, status: "running" });
@@ -245,6 +292,11 @@ export async function runAgent(args: {
 
   const audit = finishRunAudit(args.rt.budget);
   if (personal.sentPlaintext) audit.sent_plaintext_to_model = true;
+  audit.revealed = personal.manifest.revealed;
+  audit.omitted = personal.manifest.omitted;
+  audit.period = personal.manifest.period;
+  audit.allow_plaintext = personal.manifest.allow_plaintext;
+  audit.sent_counts = personal.manifest.sent_counts;
   return {
     assistantText: stripUnknownIds(assistantText.trim(), personal.allIds),
     proposals: [...args.rt.proposals.values()],

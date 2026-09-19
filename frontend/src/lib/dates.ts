@@ -78,6 +78,11 @@ export function startOfLocalDay(d: Date = new Date(), timeZone = getAccountTimeZ
   return zonedWallTimeToUtc(day, 0, 0, timeZone);
 }
 
+/** Calendar-day offset in the zone — not a raw 24h subtraction (DST-safe). */
+export function startOfLocalDayBack(from: Date, daysBack: number, timeZone = getAccountTimeZone()): Date {
+  return zonedWallTimeToUtc(shiftCivilDay(calendarDayKey(from, timeZone), -daysBack), 0, 0, timeZone);
+}
+
 export function isSameLocalDay(
   iso: string,
   day = localDayKey(),
@@ -96,7 +101,7 @@ export function entryCalendarDay(
   return calendarDayKey(timestamp, timeZone);
 }
 
-function shiftCivilDay(day: string, delta: number): string {
+export function shiftCivilDay(day: string, delta: number): string {
   const [year, month, date] = day.split("-").map(Number);
   const shifted = new Date(Date.UTC(year, month - 1, date + delta));
   const y = shifted.getUTCFullYear();

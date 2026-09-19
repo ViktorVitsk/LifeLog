@@ -135,10 +135,12 @@ describe("A2 context envelope", () => {
     const budget: ContextBudget = {
       envelope,
       decryptedEntryIds: new Set(["a"]),
+      decryptedKeys: new Set(["entry:a"]),
       audit: [],
       provider: "openrouter",
     };
     assert.equal(remainingDecryptBudget(budget), 1);
+    budget.decryptedKeys.add("entry:b");
     budget.decryptedEntryIds.add("b");
     assert.equal(remainingDecryptBudget(budget), 0);
   });

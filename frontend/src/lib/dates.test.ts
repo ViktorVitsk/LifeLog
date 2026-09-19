@@ -5,6 +5,8 @@ import {
   calendarDayKey,
   entryCalendarDay,
   sleepEventTimestamp,
+  startOfLocalDay,
+  startOfLocalDayBack,
   wakeTimestamp,
   yesterdayEvening,
 } from "./dates.ts";
@@ -38,5 +40,13 @@ describe("B3 calendar days", () => {
       sleepEventTimestamp({ wakeTime: "2026-09-19T04:30:00.000Z" }),
       "2026-09-19T04:30:00.000Z",
     );
+  });
+
+  it("shifts calendar weeks across DST instead of subtracting 6*24h", () => {
+    const spring = new Date("2026-03-30T12:00:00.000Z");
+    const weekStart = startOfLocalDayBack(spring, 6, "Europe/Berlin");
+    assert.equal(calendarDayKey(weekStart, "Europe/Berlin"), "2026-03-24");
+    const naive = new Date(startOfLocalDay(spring, "Europe/Berlin").getTime() - 6 * 24 * 3600_000);
+    assert.notEqual(calendarDayKey(naive, "Europe/Berlin"), "2026-03-24");
   });
 });

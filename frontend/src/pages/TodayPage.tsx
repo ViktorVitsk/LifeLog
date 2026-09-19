@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listPinnedCharts, loadThreadForDay, saveThreadMessage } from "../agent/chatStore";
 import { commitProposedEntry } from "../agent/commit";
 import { appConfirmation } from "../agent/confirmation";
-import { resolveContextEnvelope } from "../agent/contextEnvelope";
+import { emptyBudget, resolveContextEnvelope } from "../agent/contextEnvelope";
+import { historyForPolicy } from "../agent/historySanitize";
 import { validateProposalForSave } from "../agent/proposalValidation";
 import { runAgent } from "../agent/runtime";
 import { loadLlmSettings } from "../agent/settingsStore";
@@ -18,6 +19,10 @@ import type {
 import { DEFAULT_LLM_SETTINGS } from "../agent/types";
 import type { ToolRuntime } from "../agent/tools";
 import Briefing from "../components/today/Briefing";
+import WeeklyReviewCard from "../components/WeeklyReviewCard";
+import { useDecryptedMap } from "../components/CipherCard";
+import { getAccountTimeZone } from "../lib/dates";
+import { buildWeeklyReview } from "../lib/weeklyReview";
 import ChartBlock from "../components/today/ChartBlock";
 import Composer from "../components/today/Composer";
 import EntryCard from "../components/today/EntryCard";
@@ -31,7 +36,7 @@ import { useEntries } from "../hooks/useEntries";
 import { useIsMdUp } from "../hooks/useIsMdUp";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { api } from "../lib/api";
-import { getSessionId, isCurrentSession } from "../lib/accountScope";
+import { getSessionId, isCurrentSession, isEncryptAllowed } from "../lib/accountScope";
 import { now } from "../lib/clock";
 import { encryptLifePayload, enqueueLife } from "../lib/lifeQueue";
 import { flushLifeQueue } from "../lib/lifeStore";
@@ -39,7 +44,7 @@ import { useMergedLife } from "../hooks/useMergedLife";
 import type { ReviewPeriod } from "../agent/modes";
 
 export default function TodayPage() {
-  const { kek, token, userId } = useAuth();
+  const { kek, token, userId, timezone } = useAuth();
   const { locale, t } = useLocale();
   const sync = useSync();
   const qc = useQueryClient();
@@ -51,6 +56,18 @@ export default function TodayPage() {
   const skillsQ = useSkills();
   const habitsQ = useHabits();
   const life = useMergedLife();
+  const goalPlain = useDecryptedMap(life.bundle.goals, kek);
+  const actionPlain = useDecryptedMap(life.bundle.actions, kek);
+  const feedbackPlain = useDecryptedMap(life.bundle.feedback, kek);
+  const weekly = buildWeeklyReview({
+    now: new Date(),
+    timeZone: timezone || getAccountTimeZone(),
+    entries,
+    bundle: life.bundle,
+    goalPlain,
+    actionPlain,
+    feedbackPlain,
+  });
   const [reviewPeriod, setReviewPeriod] = useState<ReviewPeriod>("1d");
 
   const [settings, setSettings] = useState<LlmSettings>({ ...DEFAULT_LLM_SETTINGS });
@@ -77,6 +94,14 @@ export default function TodayPage() {
     setErr(null);
     setBusy(false);
   }, [userId]);
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    runGen.current += 1;
+    setDraft("");
+    setTools([]);
+    setBusy(false);
+  }, [kek]);
 
   useEffect(() => {
     if (!kek || !userId) return;
@@ -165,10 +190,14 @@ export default function TodayPage() {
     setThread((t) => [...t, userMsg]);
     await persist(userMsg);
 
-    const history: ChatCompletionMessage[] = [...thread, userMsg]
-      .filter((m) => m.content)
-      .slice(-20)
-      .map((m) => ({ role: m.role, content: m.content }));
+    const history: ChatCompletionMessage[] = historyForPolicy(
+      thread
+        .filter((m) => m.content)
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content })),
+      settings.context_policy,
+      trimmed,
+    );
 
     const envelope = resolveContextEnvelope(settings);
     const rt: ToolRuntime = {
@@ -183,15 +212,13 @@ export default function TodayPage() {
       proposals: new Map(),
       charts: [],
       envelope,
-      budget: {
-        envelope,
-        decryptedEntryIds: new Set(),
-        audit: [],
-        provider: settings.provider,
-      },
+      budget: emptyBudget(envelope, settings.provider),
       mode,
       reviewPeriod,
       dueActionIds: life.bundle.due_action_ids,
+      selectedActionId: life.bundle.due_action_ids[0] ?? null,
+      selectedGoalId: life.bundle.goals.find((g) => g.state === "active" || g.state === "accepted")?.id ?? null,
+      sessionId: session,
       lifeBundle: life.bundle,
       knownIds: new Set(life.bundle.goals.map((g) => g.id)),
     };
@@ -208,8 +235,12 @@ export default function TodayPage() {
         mode,
         rt,
         signal: ac.signal,
-        onDelta: (d) => setDraft((s) => s + d),
+        onDelta: (d) => {
+          if (gen !== runGen.current || !isCurrentSession(session) || !isEncryptAllowed()) return;
+          setDraft((s) => s + d);
+        },
         onTool: (name, status, detail) => {
+          if (gen !== runGen.current || !isCurrentSession(session) || !isEncryptAllowed()) return;
           setTools((prev) => {
             const next = [...(prev ?? [])];
             if (status === "running") next.push({ name, status });
@@ -432,6 +463,7 @@ export default function TodayPage() {
             </button>
           ))}
         </div>
+        {mode === "review" && reviewPeriod === "7d" && <WeeklyReviewCard review={weekly} />}
         {mode === "review" && (
           <div className="flex flex-wrap gap-1">
             {(["1d", "7d", "envelope"] as ReviewPeriod[]).map((item) => (
@@ -562,12 +594,22 @@ function ContextAuditLine({ audit }: { audit: ThreadMessage["context_audit"] }) 
   const { t } = useLocale();
   if (!audit) return null;
   const searched = audit.tools.some((x) => x.name === "search_entries" || x.entry_ids.length > 0);
-  if (!searched && audit.unique_decrypted === 0) return null;
+  const sent = audit.sent_counts;
+  const omitted = audit.omitted?.length ?? 0;
+  if (!searched && audit.unique_decrypted === 0 && !sent) return null;
   const n = new Set(audit.tools.flatMap((x) => x.entry_ids)).size;
   return (
     <p className="text-[11px] text-zinc-500">
-      {t.contextUsed.replace("{n}", String(n))}
+      {t.contextUsed.replace("{n}", String(n || audit.unique_decrypted))}
       {audit.sent_plaintext_to_model ? ` · ${t.contextPlaintextCloud}` : ` · ${t.contextOpenOnly}`}
+      {sent
+        ? ` · ${t.contextSentCounts
+            .replace("{g}", String(sent.goals))
+            .replace("{m}", String(sent.memory))
+            .replace("{a}", String(sent.actions))
+            .replace("{f}", String(sent.feedback))}`
+        : ""}
+      {omitted > 0 ? ` · ${t.contextOmitted.replace("{n}", String(omitted))}` : ""}
     </p>
   );
 }

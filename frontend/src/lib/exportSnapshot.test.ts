@@ -4,6 +4,27 @@ import { mergeExportEntries, mergeExportLife } from "./exportMerge.ts";
 import type { PendingEntry, PendingLife } from "../db/offlineQueue.ts";
 
 describe("full export merge", () => {
+  it("does not resurrect a tombstoned entry from an stale local cache", () => {
+    const local = {
+      id: "dead",
+      timestamp: "t",
+      entry_type: "THOUGHT",
+      encrypted_dek: "d",
+      encrypted_content: "c",
+      status: "synced",
+      queued_at: 1,
+      attempts: 0,
+      owner_user_id: "u1",
+    } as PendingEntry;
+    const merged = mergeExportEntries(
+      [{ id: "dead", timestamp: "t", entry_type: "THOUGHT", encrypted_dek: "d", encrypted_content: "c", created_at: "t", synced_from_offline: true }],
+      [local],
+      "u1",
+      ["dead"],
+    );
+    assert.equal(merged.length, 0);
+  });
+
   it("keeps a local synced copy that is missing from a server page", () => {
     const local = {
       id: "e1",
@@ -73,5 +94,38 @@ describe("full export merge", () => {
     const life = mergeExportLife(undefined, local, "u1");
     assert.equal(life.goal[0].sync_status, "pending");
     assert.equal(life.memory[0].sync_status, "rejected");
+  });
+
+  it("keeps both conflict variants and drops tombstoned cache rows", () => {
+    const local: PendingLife[] = [
+      {
+        id: "g1",
+        kind: "goal",
+        payload: { state: "active", encrypted_content: "local" },
+        status: "conflict",
+        owner_user_id: "u1",
+        queued_at: 1,
+        server_snapshot: { state: "active", encrypted_content: "server" },
+      },
+      {
+        id: "g2",
+        kind: "goal",
+        payload: { state: "active" },
+        status: "synced",
+        owner_user_id: "u1",
+        queued_at: 1,
+      },
+    ];
+    const life = mergeExportLife(
+      { goals: [{ id: "g2" } as never], memory: [], actions: [], feedback: [], due_action_ids: [] },
+      local,
+      "u1",
+      ["g2"],
+    );
+    assert.equal(life.goal.length, 1);
+    assert.equal(life.goal[0].id, "g1");
+    assert.equal(life.goal[0].sync_status, "conflict");
+    assert.equal((life.goal[0].server_variant as { encrypted_content?: string })?.encrypted_content, "server");
+    assert.equal(life.goal[0].conflict_note, "local_and_server_kept");
   });
 });

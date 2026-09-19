@@ -8,7 +8,8 @@ import { useLocale } from "../context/LocaleContext";
 import { api } from "../lib/api";
 import { COMMON_TIMEZONES } from "../lib/dates";
 import { collectPages } from "../lib/paging";
-import { buildFullExport } from "../lib/exportSnapshot";
+import { buildFullExport, ExportCancelledError } from "../lib/exportSnapshot";
+import { captureSaveScope, isCurrentSession } from "../lib/accountScope";
 
 function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -63,21 +64,33 @@ export default function SettingsPage() {
     setBusy("full");
     setMsg(null);
     try {
-      const snap = await buildFullExport({ token, kek, userId, timezone });
+      const scope = captureSaveScope();
+      if (scope.owner !== userId) throw new ExportCancelledError();
+      const snap = await buildFullExport({ token, kek, userId: scope.owner, timezone });
+      if (!isCurrentSession(scope.sessionId) || scope.owner !== userId) throw new ExportCancelledError();
       if (import.meta.env.DEV) {
         (window as unknown as { __lastExport?: unknown }).__lastExport = snap;
       }
       downloadJson(`lifelog-full-${new Date().toISOString().slice(0, 10)}.json`, snap);
-      const report = snap.report as { entry_count: number; decrypt_error_count: number };
+      const report = snap.report as {
+        completeness?: string;
+        sections?: { entries?: { exported?: number; failed?: number }; chat?: { exported?: number; failed?: number } };
+      };
       const chat = snap.chat_turns as unknown[];
+      const exported = report.sections?.entries?.exported ?? (snap.entries as unknown[] | undefined)?.length ?? 0;
+      const failed =
+        (report.sections?.entries?.failed ?? 0) +
+        (report.sections?.chat?.failed ?? 0);
       setMsg(
         t.exportReport
-          .replace("{n}", String(report.entry_count))
+          .replace("{n}", String(exported))
           .replace("{chat}", String(chat.length))
-          .replace("{err}", String(report.decrypt_error_count)),
+          .replace("{err}", String(failed))
+          .replace("{completeness}", String(snap.completeness ?? report.completeness ?? "")),
       );
     } catch (e) {
-      setMsg((e as Error).message);
+      if (e instanceof ExportCancelledError) setMsg(t.exportCancelled);
+      else setMsg((e as Error).message);
     } finally {
       setBusy(null);
     }

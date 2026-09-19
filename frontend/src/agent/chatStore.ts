@@ -35,25 +35,49 @@ export async function loadThreadForDay(kek: CryptoKey, day = localDayKey()): Pro
   return out;
 }
 
-export async function exportDecryptedTurns(kek: CryptoKey): Promise<ThreadMessage[]> {
-  const owner = getCurrentUserId();
-  const rows = await db.chat_turns.orderBy("created_at").toArray();
-  const out: ThreadMessage[] = [];
+export interface ExportedChatTurn {
+  id: string;
+  role?: string;
+  content?: string | null;
+  created_at: number;
+  day?: string;
+  decrypt_error?: boolean;
+  device_only: true;
+}
+
+export async function exportDecryptedTurns(
+  kek: CryptoKey,
+  userId: string,
+): Promise<{ turns: ExportedChatTurn[]; failed: number; loaded: number }> {
+  const rows = (await db.chat_turns.orderBy("created_at").toArray()).filter((row) => row.owner_user_id === userId);
+  const turns: ExportedChatTurn[] = [];
+  let failed = 0;
   for (const row of rows) {
-    if (owner && row.owner_user_id !== owner) continue;
     try {
       const raw = await decryptEntry(row.encrypted_content, row.encrypted_dek, kek);
-      out.push(JSON.parse(raw) as ThreadMessage);
+      const parsed = JSON.parse(raw) as ThreadMessage;
+      turns.push({
+        id: parsed.id || row.id,
+        role: parsed.role,
+        content: parsed.content,
+        created_at: parsed.created_at ?? row.created_at,
+        day: row.day,
+        device_only: true,
+      });
     } catch {
-      out.push({
+      failed += 1;
+      turns.push({
         id: row.id,
-        role: "assistant",
-        content: "",
+        role: undefined,
+        content: null,
         created_at: row.created_at,
+        day: row.day,
+        decrypt_error: true,
+        device_only: true,
       });
     }
   }
-  return out;
+  return { turns, failed, loaded: rows.length };
 }
 
 export async function listPinnedCharts(): Promise<{ id: string; spec_json: string }[]> {

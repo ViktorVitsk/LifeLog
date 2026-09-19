@@ -1,27 +1,31 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import CipherCard, { useDecryptedMap } from "../components/CipherCard";
+import WeeklyReviewCard from "../components/WeeklyReviewCard";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useSync } from "../context/SyncContext";
 import { useHabits } from "../hooks/useCatalog";
+import { useEntries } from "../hooks/useEntries";
 import { useMergedLife } from "../hooks/useMergedLife";
-import type { LifeActionRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
+import type { LifeActionRead, LifeFeedbackRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
 import { resolveLifeApplyLocal, resolveLifeKeepLocalCopy, resolveLifeKeepServer } from "../lib/lifeQueue";
 import { queueSyncLabel } from "../lib/mergeLife";
 import type { SaveScope } from "../lib/accountScope";
 import type { TStrings } from "../i18n/strings";
 import type { PendingLife } from "../db/offlineQueue";
+import { calendarDayKey, getAccountTimeZone, shiftCivilDay, zonedWallTimeToUtc } from "../lib/dates";
+import { buildWeeklyReview } from "../lib/weeklyReview";
 
 function newId(): string {
   return crypto.randomUUID();
 }
 
 function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
+  const zone = getAccountTimeZone();
+  const day = shiftCivilDay(calendarDayKey(new Date(), zone), days);
+  return zonedWallTimeToUtc(day, 12, 0, zone).toISOString();
 }
 
 function outcomeLabel(kind: string, t: TStrings): string {
@@ -33,13 +37,27 @@ function outcomeLabel(kind: string, t: TStrings): string {
 }
 
 export default function LifePage() {
-  const { token, kek, userId } = useAuth();
+  const { token, kek, userId, timezone } = useAuth();
   const { t } = useLocale();
   const { trigger } = useSync();
   const qc = useQueryClient();
   const habits = useHabits().data ?? [];
   const { bundle, statuses, local } = useMergedLife();
+  const { entries } = useEntries();
   const goalPlain = useDecryptedMap(bundle.goals, kek);
+  const actionPlain = useDecryptedMap(bundle.actions, kek);
+  const feedbackPlain = useDecryptedMap(bundle.feedback, kek);
+  const weekly = buildWeeklyReview({
+    now: new Date(),
+    timeZone: timezone || getAccountTimeZone(),
+    entries,
+    bundle,
+    goalPlain,
+    actionPlain,
+    feedbackPlain,
+  });
+  const pendingFeedback = useRef<Map<string, string>>(new Map());
+  const feedbackBusy = useRef(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [why, setWhy] = useState("");
@@ -237,31 +255,55 @@ export default function LifePage() {
   async function onFeedback(
     action: LifeActionRead,
     next: "continue" | "complete" | "stop",
-    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string },
+    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string; observed_on: string },
   ) {
-    if (!kek) return;
+    if (!kek || feedbackBusy.current) return;
     if (!fields.what_changed.trim() && !fields.difficulty.trim() && !fields.side_effects.trim()) {
       setMsg(t.reviewFields);
       return;
     }
+    feedbackBusy.current = true;
+    const feedbackId = pendingFeedback.current.get(action.id) ?? newId();
+    pendingFeedback.current.set(action.id, feedbackId);
     const outcome =
       next === "stop" ? "not_suitable" : next === "complete" ? "tried_helped" : fields.tried ? "tried_helped" : "not_tried";
-    const blob = await encryptLifePayload(kek, {
-      tried: fields.tried,
-      what_changed: fields.what_changed.trim(),
-      difficulty: fields.difficulty.trim(),
-      side_effects: fields.side_effects.trim(),
-      continue_notes: next,
-    });
-    await persist(
-      "feedback",
-      { id: newId(), action_id: action.id, outcome_kind: outcome, encrypted_dek: blob.encrypted_dek, encrypted_content: blob.encrypted_content },
-      blob.scope,
-    );
-    if (next === "complete") await writeAction(action, { state: "completed", review_at: null });
-    else if (next === "stop") await writeAction(action, { state: "stopped", review_at: null });
-    else await writeAction(action, { state: "active", review_at: plusDays(7) });
-    setMsg(t.lifeFeedbackSaved);
+    try {
+      const blob = await encryptLifePayload(kek, {
+        tried: fields.tried,
+        what_changed: fields.what_changed.trim(),
+        difficulty: fields.difficulty.trim(),
+        side_effects: fields.side_effects.trim(),
+        continue_notes: next,
+        observed_on: fields.observed_on || null,
+        recorded_at: new Date().toISOString(),
+      });
+      await persist(
+        "feedback",
+        { id: feedbackId, action_id: action.id, outcome_kind: outcome, encrypted_dek: blob.encrypted_dek, encrypted_content: blob.encrypted_content },
+        blob.scope,
+      );
+      try {
+        if (next === "complete") await writeAction(action, { state: "completed", review_at: null });
+        else if (next === "stop") await writeAction(action, { state: "stopped", review_at: null });
+        else await writeAction(action, { state: action.state === "accepted" ? "accepted" : "active" });
+        pendingFeedback.current.delete(action.id);
+        setMsg(t.lifeFeedbackSaved);
+      } catch (e) {
+        setMsg(t.lifeFeedbackPartial);
+        throw e;
+      }
+    } catch (e) {
+      if ((e as Error).message !== t.lifeFeedbackPartial) setMsg((e as Error).message);
+    } finally {
+      feedbackBusy.current = false;
+    }
+  }
+
+  async function onChangePlan(action: LifeActionRead, text: string) {
+    if (!kek || !text.trim()) return;
+    const blob = await encryptLifePayload(kek, { proposal: text.trim(), chosen_try: text.trim(), grounds: "" });
+    await writeAction(action, { encrypted_dek: blob.encrypted_dek, encrypted_content: blob.encrypted_content });
+    setMsg(t.lifeActionSaved);
   }
 
   function goalTitle(g: LifeGoalRead): string {
@@ -276,6 +318,19 @@ export default function LifePage() {
         <p className="text-sm text-zinc-400 mt-1">{t.lifeHint}</p>
       </div>
       {msg && <p className="text-xs text-zinc-400">{msg}</p>}
+
+      <WeeklyReviewCard
+        review={weekly}
+        onSave={() => {
+          const blob = new Blob([JSON.stringify(weekly, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `lifelog-weekly-${weekly.current.period.start_day}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }}
+      />
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-2">
         <h2 className="text-sm font-medium">{t.lifeNewGoal}</h2>
@@ -375,6 +430,7 @@ export default function LifePage() {
             feedback={bundle.feedback.filter((f) => f.action_id === a.id)}
             extra={conflictPanel(a.id)}
             onReviewAt={(iso) => void writeAction(a, { review_at: iso })}
+            onChangePlan={(text) => void onChangePlan(a, text)}
             onFeedback={(next, fields) => void onFeedback(a, next, fields)}
           />
         ))}
@@ -469,6 +525,7 @@ function ActionRow({
   feedback,
   extra,
   onReviewAt,
+  onChangePlan,
   onFeedback,
 }: {
   action: LifeActionRead;
@@ -478,18 +535,22 @@ function ActionRow({
   t: TStrings;
   outcomeLabel: (kind: string, t: TStrings) => string;
   extra?: ReactNode;
-  feedback: { outcome_kind: string }[];
+  feedback: LifeFeedbackRead[];
   onReviewAt: (iso: string) => void;
+  onChangePlan: (text: string) => void;
   onFeedback: (
     next: "continue" | "complete" | "stop",
-    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string },
+    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string; observed_on: string },
   ) => void;
 }) {
   const [tried, setTried] = useState(true);
   const [what, setWhat] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [side, setSide] = useState("");
-  const fields = { tried, what_changed: what, difficulty, side_effects: side };
+  const [observed, setObserved] = useState("");
+  const [plan, setPlan] = useState("");
+  const fields = { tried, what_changed: what, difficulty, side_effects: side, observed_on: observed };
+  const started = action.period_start ?? action.created_at;
   return (
     <div className="space-y-1 text-sm border-t border-zinc-800 pt-2">
       <div className="flex justify-between gap-2">
@@ -499,16 +560,24 @@ function ActionRow({
             {(plain) => <span>{String(plain.chosen_try ?? plain.proposal ?? action.state)}</span>}
           </CipherCard>
           {action.result_metric && <div className="text-[11px] text-zinc-500">{action.result_metric}</div>}
+          <div className="text-[11px] text-zinc-500">
+            {t.lifeActionStarted}: {started ? started.slice(0, 10) : "—"}
+            {" · "}
+            {t.lifeActionDiscuss}: {action.review_at ? action.review_at.slice(0, 10) : "—"}
+            {" · "}
+            {action.state}
+          </div>
           {action.state !== "completed" && action.state !== "stopped" && (
             <label className="block text-[11px] text-zinc-400">
-              {t.lifeReviewAt}
+              {t.lifePostpone}
               <input
                 type="date"
                 className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
                 value={action.review_at ? action.review_at.slice(0, 10) : ""}
                 onChange={(e) => {
                   if (!e.target.value) return;
-                  onReviewAt(new Date(`${e.target.value}T12:00:00`).toISOString());
+                  const zone = getAccountTimeZone();
+                  onReviewAt(zonedWallTimeToUtc(e.target.value, 12, 0, zone).toISOString());
                 }}
               />
             </label>
@@ -516,16 +585,51 @@ function ActionRow({
         </div>
         {badge}
       </div>
-      {feedback.map((f, i) => (
-        <div key={i} className="text-[11px] text-zinc-500">
-          {outcomeLabel(f.outcome_kind, t)}
-        </div>
-      ))}
+      {feedback.length > 0 && <div className="text-[11px] text-zinc-400">{t.lifeFeedbackHistory}</div>}
+      {feedback
+        .slice()
+        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+        .map((f) => (
+          <div key={f.id} className="text-[11px] text-zinc-400 rounded bg-zinc-950/60 border border-zinc-800 px-2 py-1">
+            <div>
+              {f.created_at.slice(0, 10)} · {outcomeLabel(f.outcome_kind, t)}
+            </div>
+            <CipherCard kek={kek} dek={f.encrypted_dek} ct={f.encrypted_content} fallback={f.outcome_kind}>
+              {(plain) => (
+                <div>
+                  {plain.observed_on ? `${t.lifeObservedOn}: ${String(plain.observed_on)} · ` : ""}
+                  {String(plain.what_changed ?? "")}
+                  {plain.difficulty ? ` · ${String(plain.difficulty)}` : ""}
+                </div>
+              )}
+            </CipherCard>
+          </div>
+        ))}
       {action.state !== "completed" && action.state !== "stopped" && (
         <div className="space-y-1">
+          <div className="flex gap-1">
+            <input
+              className="flex-1 rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
+              placeholder={t.lifeChangePlan}
+              value={plan}
+              onChange={(e) => setPlan(e.target.value)}
+            />
+            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => { if (plan.trim()) onChangePlan(plan.trim()); setPlan(""); }}>
+              {t.save}
+            </button>
+          </div>
           <label className="flex items-center gap-2 text-xs">
             <input type="checkbox" checked={tried} onChange={(e) => setTried(e.target.checked)} />
             {t.lifeTried}
+          </label>
+          <label className="block text-[11px] text-zinc-400">
+            {t.lifeObservedOn}
+            <input
+              type="date"
+              className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
+              value={observed}
+              onChange={(e) => setObserved(e.target.value)}
+            />
           </label>
           <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeWhatChanged} value={what} onChange={(e) => setWhat(e.target.value)} />
           <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeDifficulty} value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />

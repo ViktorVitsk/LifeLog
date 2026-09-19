@@ -182,15 +182,27 @@ Browser (`http://127.0.0.1:5173/`, synthetic + `decrypt_n`, `Europe/Kiev`):
 | Пункт | Реализовано | Unit | Интеграция | Браузер |
 |---|---|---|---|---|
 | Согласованный снимок `owner+id+payload+rev` до HTTP | да | да | — | да: IndexedDB `__queueIdbRace` payload B / version 8 |
-| Перенос server version 7→8 на оставшуюся pending-правку | да | да | — | остаётся |
-| Старые conflict/reject/error/delete-ack не портят новую ревизию | да | да | — | остаётся |
-| Удаление участвует в `local_rev` | да | да | — | Undo в полном сценарии волны 3 |
-| Tombstones при пустой очереди | да | — | — | остаётся |
-| Локальный снимок life; synced не пропадает без сервера | да | да | — | остаётся |
-| Конфликт: оба варианта + явный выбор | да | да (resolve) | — | остаётся |
-| Общий бюджет контекста / history / экспорт | нет | — | — | — |
-| Недельный обзор и цикл действия | нет | — | — | — |
+| Перенос server version 7→8 на оставшуюся pending-правку | да | да | — | да: тот же `__queueIdbRace` (`final payload=B rev=2 version=8 status=pending`) |
+| Старые conflict/reject/error/delete-ack не портят новую ревизию | да | да | — | частично: success-ack гонка в `__queueIdbRace`; stale conflict/reject — unit |
+| Удаление участвует в `local_rev` | да | да | — | да: Undo мысли на Today (лента пуста после отмены) |
+| Tombstones при пустой очереди | да | — | — | не проверено (нужно удаление с другого устройства) |
+| Локальный снимок life; synced не пропадает без сервера | да | да | — | да: fetch заблокирован, цель «Лечь раньше» + действие + 2 feedback видны |
+| Конфликт: оба варианта + явный выбор | да | да (resolve) | — | да: оба варианта + «Оставить серверную» → status synced |
+| Общий бюджет контекста (тип+id) | да | да | да (synthetic intercept) | да: audit «пропущено из‑за лимита: 4», цели/действия/отзывы учтены |
+| History не дублирует user; строгая политика не пересылает старые тексты | да | да | да | частично: synthetic карточка без дубля user; смена политики в UI не гонялась |
+| Отмена onDelta/onTool и раундов при смене аккаунта/ключа | да | да | да (session abort) | не проверено в UI (logout mid-stream) |
+| Честный экспорт: owner, секции, конфликты, tombstones, cancel | да | да (merge) | — | да: `format_version=2` complete; 1/1/1/2; chat_scope this_device_only. Cancel/сбой API — unit |
+| Недельный обзор без LLM | да | да | — | да: 2026-09-13→19 Europe/Kiev, 1/7 дней, n метрик, helped≠proof, источники 1+1+2 |
+| Карточка действия: история, перенос, атомарный feedback | да | — | — | да: план изменён, due 21.09, 2 отзыва в истории; due-баннер исчез. Сбой mid-save — не инжектился |
+
+## Wave 3 browser (qa_f_0919b, 2026-09-19)
+
+- Цель «Лечь раньше», действие «Телефон в другой комнате с 22:45», feedback 00:20 и 23:10, перенос обсуждения на 2026-09-21.
+- Экспорт `__lastExport`: completeness complete, sections loaded=exported=decrypted, ошибок 0.
+- Офлайн: `window.fetch` отклонён; SPA-навигация без reload; оболочка страницы уже была в памяти.
+- Две вкладки одного аккаунта: не гонялись (KEK в памяти, вторая вкладка без ключа). Координация — Web Locks + IDB tx.
+- Смена аккаунта во время экспорта/запроса: unit/synthetic, не UI.
 
 ## Next
 
-Wave 1 of F is in code. Waves 2–3: agent budget, honest export, weekly review, action cycle.
+Iteration F волны 1–3 в коде и закоммичены. Незакрытый хвост: tombstones при пустой очереди в браузере, две вкладки с двумя KEK, logout mid-stream, инжект сбоя второй операции feedback.

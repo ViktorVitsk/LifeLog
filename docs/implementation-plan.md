@@ -11,24 +11,24 @@ Living document. A stage is not done just because files exist — behaviour chec
 |---|---|---|
 | A1 Proposal vs persist | checked (unit) | Model cannot persist; app sets confirmation |
 | A2 Context envelope | checked (unit) | Envelope + unique decrypt budget + compact audit |
-| A3 KEK verifier | implemented, not UI-run | Local verifier; JWT refresh is not a key check |
-| A4 Account isolation | implemented, not UI-run | `owner_user_id`, orphans, query keys |
+| A3 KEK verifier | checked (unit + UI) | Unlock after reload re-derives KEK; JWT session alone is not enough |
+| A4 Account isolation | checked (unit + UI) | Session `qa_ui_0919` only sees its own life + entries |
 | A5 Privacy wording | done | README, ARCHITECTURE, banners |
 | B1 Sync contract | checked (unit + live API) | Per-item created/duplicate/conflict/rejected |
 | B2 Delete / undo | checked (unit + live API) | Version, soft-delete, queued undo, no GET resurrection |
-| B3 Timezone / calendar day | checked (unit + live API) | IANA zone, event vs input time, sleep = wake day |
-| B4 Aggregation | checked (unit + live API) | Catalog, SUM vs AVG, n/coverage, chosen pairs + lag |
-| B5 Schema / export | checked (unit + live API) | CHECK 1–10, habit index, paged export + decrypt report |
-| C Goals / memory / actions | checked (unit + live API) | Encrypted goals/memory/actions, owner-checked links |
-| D Chat modes | checked (unit) | Record / Analyze / Review, allowlists, cite filter, due reminder |
+| B3 Timezone / calendar day | checked (unit + live API + UI) | Register IANA, Settings PUT, check-in snapshot `event_timezone` |
+| B4 Aggregation | checked (unit + live API + UI) | Coverage `n` / days / %, empty joint = insufficient |
+| B5 Schema / export | checked (unit + live API + UI) | Sliders 1–10; paged meta + full decrypt report |
+| C Goals / memory / actions | checked (unit + live API + UI) | Encrypted goal / proposed→accepted memory / action on `/insights/life` |
+| D Chat modes | checked (unit + UI) | Record / Analyze / Review chips; due reminder on Today open |
 
 ## Environment (this session)
 
 - Permission granted: Compose Postgres, Alembic on this volume, `.env` for stack config, synthetic QA users, host tests, Cursor browser on `:5173`.
 - `docker compose up --build` **failed**: Docker Desktop does not share `/media/dev/SSD/...` for bind mounts. `postgres` alone starts (named volume only).
-- Host stack used instead: Postgres `:5433`, uvicorn `:8001`. Alembic `0001`–`0008` applied on this test volume.
-- Frontend Vite did not start: `frontend/node_modules` is `root:root` and contains only Windows Rollup binaries. `sudo` needs a password; bind-mount frontend is blocked by Docker file sharing.
-- To unblock UI: add `/media/dev/SSD` (or the project path) in Docker Desktop → File Sharing, **or** `sudo chown -R "$USER:$USER" frontend/node_modules && cd frontend && npm install`.
+- Host stack used instead: Postgres `:5433`, uvicorn `:8001`, Vite `:5173`. Alembic `0001`–`0008` applied on this test volume.
+- Frontend unblocked: `chown` + `npm install` wrote Linux Rollup; Vite `v5.4.21` serves `http://127.0.0.1:5173/`.
+- Bind-mount Compose for backend/frontend still blocked (Docker Desktop file sharing).
 - No OpenRouter/Ollama calls. No `down -v`. Commits allowed after each stage; no push.
 
 ## Confirmed defects (code, 2026-09-19)
@@ -97,17 +97,26 @@ LIFELOG_LIVE_API=1 uv run pytest tests/test_sync_api_live.py tests/test_calendar
 
 Alembic on this test volume: `0001`–`0008`.
 
-Not run: Cursor browser UI, OpenRouter/Ollama, `docker compose` backend/frontend with bind mounts.
+Cursor browser (`qa_ui_0919`, `http://127.0.0.1:5173/`):
+
+- Register stored browser IANA (`Europe/Kiev`); Settings saved `Europe/Moscow` («Пояс сохранён.»).
+- After reload, JWT stays and KEK unlock is required (A3).
+- Manual check-in: scores 1–10, API `event_timezone=Europe/Moscow`, dashboard shows `19 сент., 12:18`.
+- Analytics: empty joint = «Мало совместных наблюдений…»; after one mood point `среднее · n=1 · дней 1/30 (3%)`.
+- Export: metadata `0` pages; full report `записей 0 · чат 0 · ошибок расшифровки 0` (before the check-in).
+- Life: goal decrypts, memory proposed→accepted, action + feedback chips.
+- Today: chips Записать / Разобрать / Обзор; due banner «Есть 1 действие(й) к обсуждению…» after `review_at` is due. `QueryClient` `staleTime: 60s` can hide a just-updated due list until remount/reload.
+
+Not run: OpenRouter/Ollama, `docker compose` backend/frontend with bind mounts, Undo click in the browser.
 
 ## Remaining limits
 
-- Browser / Docker UI flows were not run (file sharing + root `node_modules`).
 - Undo UI was not clicked in a browser; behaviour is covered by unit + live API.
 - Charts under `today` policy still use the 7d open-metrics API enum (no 1-day period).
 - Old LLM settings row `id=default` is not auto-attached; re-save agent settings per account.
-- Cursor browser UI still not run (Docker file sharing + root `node_modules`).
-- OpenRouter/Ollama were not called; D mode behaviour is covered by unit tests.
+- OpenRouter/Ollama were not called; D tool allowlists stay unit-covered.
+- Due reminder on Today uses the cached `["life"]` query; a due change made outside that query is visible on the next fresh fetch (reload / 60s).
 
 ## Next
 
-Plan A–D is implemented on this branch. Remaining: UI run after `node_modules` is writable, then optional polish.
+Plan A–D is implemented and UI-checked on this host stack. Optional: Docker file sharing for bind mounts, real LLM keys, undo click, `refetchOnMount: "always"` for Today life.

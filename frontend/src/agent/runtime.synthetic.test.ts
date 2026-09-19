@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { webcrypto } from "node:crypto";
 import { deriveKEK, encryptEntry } from "../lib/crypto.ts";
 import { runAgent } from "./runtime.ts";
-import { setSyntheticChatHandler } from "./providers.ts";
+import { delayedSyntheticHandler, setSyntheticChatHandler } from "./providers.ts";
 import { emptyBudget, resolveContextEnvelope } from "./contextEnvelope.ts";
 import { setCurrentUserId, setEncryptAllowed, getSessionId } from "../lib/accountScope.ts";
 import type { ToolRuntime } from "./tools.ts";
@@ -360,6 +360,58 @@ describe("runAgent synthetic personal context", () => {
     );
     assert.equal(calls, 1);
     setEncryptAllowed(false);
+    setCurrentUserId(null);
+  });
+
+  it("stops later synthetic chunks after logout mid-stream", async () => {
+    setCurrentUserId("u1");
+    setEncryptAllowed(true);
+    const session = getSessionId();
+    const kek = await deriveKEK("testdata1", SALT);
+    const seen: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setSyntheticChatHandler(
+      delayedSyntheticHandler(["PART_A_", "PART_B_SECRET"], async (index) => {
+        if (index === 1) await gate;
+      }),
+    );
+    const s = settings();
+    const envelope = resolveContextEnvelope(s);
+    const running = runAgent({
+      settings: s,
+      locale: "en",
+      history: [],
+      userText: "hi",
+      rt: {
+        kek,
+        token: "t",
+        entries: [],
+        skills: [],
+        habits: [],
+        settings: s,
+        locale: "en",
+        sourceTurnId: "u1",
+        proposals: new Map(),
+        charts: [],
+        envelope,
+        budget: emptyBudget(envelope, "synthetic"),
+        sessionId: session,
+        lifeBundle: { goals: [], memory: [], actions: [], feedback: [], due_action_ids: [] },
+      },
+      onDelta: (text) => seen.push(text),
+    });
+    for (let i = 0; i < 20 && seen.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    setCurrentUserId("u2");
+    setEncryptAllowed(false);
+    release();
+    await assert.rejects(running, (err: unknown) => err instanceof DOMException && err.name === "AbortError");
+    assert.deepEqual(seen, ["PART_A_"]);
+    assert.equal(seen.join("").includes("PART_B_SECRET"), false);
     setCurrentUserId(null);
   });
 

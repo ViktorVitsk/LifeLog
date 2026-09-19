@@ -240,4 +240,22 @@ Iteration F волны 1–3 в коде и закоммичены. Незакр
 | 6. Обрыв feedback/action, reload без второго отзыва | да | да | да | да: 1 feedback id, сервер 1 | первый POST оборван, повтор в той же сессии доставил |
 | 7. Обзор, поздний feedback, исправление, ссылки | да | да | да (числа) | да на сегодняшних данных `qa_h_0919` | готовый 14-дневный набор в UI не засевали |
 
-Коммиты H: `4ca901b`, `e056b40`, `2f476eb`, `33744ca`. `frontend/tsconfig.tsbuildinfo` не входил. Production `dist` без `__queueIdb` / `__lastExport`. Frontend: 112 тестов, 111 pass, 1 skip (нет IndexedDB в Node). Пункт 9 не начинали.
+Допустимые переходы составной `LifeOp` (без отдельного фреймворка состояний):
+
+| Из | Событие | В |
+|---|---|---|
+| — | новое отправление | `local` |
+| `local` | ack feedback этой ревизии | `feedback_acked` |
+| `local` | ack action этой ревизии | `action_acked` |
+| `local` / `*_acked` | conflict этой ревизии | `action_conflict` |
+| `action_conflict` | пользователь применил локальное, затем ack своей ревизии | `*_acked` / `done` |
+| `action_conflict` | пользователь оставил сервер (другой ciphertext) | `feedback_acked` или `local`, не `done` |
+| `feedback_acked` + ack action этой ревизии | обе стороны этой операции | `done` |
+| открытая `feedback_and_action` | новое решение по тому же действию | `superseded` |
+| `feedback_correction` | новое решение по действию | без изменения (не скрывать недоставленный отзыв) |
+| `done` | повтор того же `submission_id` | `done` (без записи) |
+| `superseded` | старый ack | `superseded` (игнор) |
+| любое | запись с меньшим `status_seq` | без изменения |
+| `done` / `superseded` | refresh / повтор helper | без возврата в `local` |
+
+Отсутствующие `*_local_rev` не считаются совпадением. Восстановление — только если ciphertext операции совпал с текущей строкой. Коммиты H: `4ca901b`, `e056b40`, `2f476eb`, `33744ca`. `frontend/tsconfig.tsbuildinfo` не входил. Production `dist` без `__queueIdb` / `__lastExport`. Frontend: 112 тестов, 111 pass, 1 skip (нет IndexedDB в Node). Пункт 9 не начинали.

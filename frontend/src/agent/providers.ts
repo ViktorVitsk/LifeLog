@@ -18,7 +18,26 @@ export type SyntheticChatHandler = (args: {
   messages: ChatCompletionMessage[];
   tools: ToolDef[];
   stream: boolean;
+  signal?: AbortSignal;
+  onDelta?: (text: string) => void;
 }) => Promise<{ content: string; tool_calls: ToolCall[] }> | { content: string; tool_calls: ToolCall[] };
+
+export function delayedSyntheticHandler(
+  chunks: string[],
+  wait: (index: number) => Promise<void>,
+): SyntheticChatHandler {
+  return async ({ onDelta, signal }) => {
+    let content = "";
+    for (let i = 0; i < chunks.length; i++) {
+      if (signal?.aborted) break;
+      await wait(i);
+      if (signal?.aborted) break;
+      content += chunks[i];
+      onDelta?.(chunks[i]);
+    }
+    return { content, tool_calls: [] };
+  };
+}
 
 let syntheticHandler: SyntheticChatHandler | null = null;
 
@@ -40,13 +59,21 @@ export async function completeChat(args: {
 }): Promise<{ content: string; tool_calls: ToolCall[] }> {
   if (args.settings.provider === "synthetic") {
     const handler = syntheticHandler ?? defaultSyntheticHandler;
+    let emitted = false;
+    const onDelta = (text: string) => {
+      emitted = true;
+      if (args.signal?.aborted) return;
+      args.onDelta?.(text);
+    };
     const out = await handler({
       settings: args.settings,
       messages: args.messages,
       tools: args.tools,
       stream: args.stream,
+      signal: args.signal,
+      onDelta,
     });
-    if (out.content && args.onDelta) args.onDelta(out.content);
+    if (out.content && args.onDelta && !emitted && !args.signal?.aborted) args.onDelta(out.content);
     return { content: out.content ?? "", tool_calls: out.tool_calls ?? [] };
   }
 

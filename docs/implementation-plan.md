@@ -14,6 +14,9 @@
 - Локальные строки без `owner_user_id` — orphan: их нельзя автоматически привязать к вошедшему пользователю.
 - Привязка orphan допустима только после расшифровки текущим KEK и явного подтверждения пользователя.
 - JWT подтверждает сессию, но не владение KEK. После reload нужен verifier или успешная расшифровка существующего ciphertext.
+- Login ограничен пятью неудачами за 300 секунд на `(IP, username)`; успешный вход сбрасывает счётчик.
+- Refresh сохраняет исходный JWT `iat`; rolling token не переживает абсолютный 30-дневный потолок сессии.
+- `kdf_version=1` означает исходный PBKDF2-SHA256/100k; неизвестная версия отклоняется, а не подменяется параметрами.
 - KEK живёт только в памяти, не сохраняется в local/session storage и сбрасывается при logout или смене сессии.
 - Сервер хранит ciphertext и метаданные, но не расшифровывает diary/life payload и не логирует payload/ciphertext.
 - Логи sync содержат только счётчики и reason codes.
@@ -83,6 +86,10 @@
 - Первый browser full export содержал одну diary page; multi-page merge покрыт unit, но не отдельным большим UI dataset.
 - Готовый 14-дневный набор для weekly review не засевался в UI; вычисления и flags покрыты авто-тестами.
 - E2E cleanup tombstone-ит созданные entities, но API удаления user отсутствует: после тестов остаются пустые synthetic users.
+- Login throttle хранится в памяти одного процесса и сбрасывается при рестарте; это приемлемо только для заявленного localhost/single-worker профиля.
+- PBKDF2 остаётся на 100k для совместимости. Version 2 не активирована; для неё сначала нужен opaque bridge старого KEK под новым KEK, иначе существующие `encrypted_dek` станут недоступны.
+- JWT по-прежнему не имеет server-side revoke list; абсолютный потолок ограничивает продление, но не отзывает уже выданный токен.
+- `docker-compose.yml` официально остаётся localhost-only development profile и не должен публиковаться в internet/untrusted LAN.
 
 ## Changelog
 
@@ -105,3 +112,14 @@
 - **1.6 checked (test run):** Playwright E2E account/sync race scenarios — 5/5 passed.
 - **1.7 checked (docs):** подробный документ перенесён в архив без потери текста; основной план сокращён.
 - **Wave 1 final matrix checked:** `tsc` passed; frontend unit 139/139, component 2/2; Ruff passed; backend unit 35 passed + 5 live skipped; live mode 40/40; Playwright E2E 5/5.
+
+### Iteration I — Wave 2 progress
+
+- **2.1 checked (unit + live):** первичная выборка entry sync ограничена `Entry.user_id`; чужой UUID по-прежнему получает явный `rejected/id_unavailable`.
+- **2.2 checked (unit + live):** process-local limiter `(IP, username)` возвращает 429 после пяти неудач за 300 секунд; успешный вход сбрасывает счётчик.
+- **2.3 checked (migration + unit + live):** Alembic 0009 добавляет `users.kdf_version=1`; register/login возвращают версию, клиент выбирает строго v1-параметры. PBKDF2 не изменён.
+- **2.4 checked (unit + live):** refresh сохраняет исходный `iat`, отказывает после 30 дней и ограничивает `exp` абсолютным потолком.
+- **2.5 checked (unit + live):** `GET /api/life` поддерживает `limit/offset/next_offset`; вызов без limit остаётся полным, текущий клиент прозрачно объединяет страницы.
+- **2.6 checked (docs):** поддерживаемая граница развёртывания зафиксирована как localhost-only; dev compose прямо запрещено считать production-профилем.
+- **Wave 2 final matrix checked:** `tsc` passed; frontend unit 142/142, component 2/2; Ruff passed; backend unit 44 passed + 6 live skipped; live mode 50/50; Playwright E2E 5/5; Alembic current `0009 (head)`.
+- **Run note:** первая live-попытка ошибочно попала в старый uvicorn на занятом `:8001` и дала 2 ожидаемых несовпадения старого API; изолированный новый процесс на `:8011` прошёл 50/50.

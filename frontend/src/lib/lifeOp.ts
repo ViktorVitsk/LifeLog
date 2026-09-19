@@ -482,7 +482,7 @@ export async function commitFeedbackCorrection(args: CommitCommon & {
     outcome,
     decision,
     scope,
-    existingOp: existingOp && existingOp.status !== "done" ? existingOp : undefined,
+    existingOp,
     createdAt: typeof existingPlain?.created_at === "string" ? existingPlain.created_at : args.existingFeedback.created_at,
     recordedAt: typeof existingPlain?.recorded_at === "string" ? existingPlain.recorded_at : undefined,
     actionVersion:

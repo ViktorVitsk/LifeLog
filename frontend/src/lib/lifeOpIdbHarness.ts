@@ -52,8 +52,10 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
   const name = `lifelog-v6mig-${crypto.randomUUID()}`;
   const owner = "mig-owner";
   const kek = await deriveKEK("testdata1", "ab".repeat(16));
-  const openCipher = await encryptEntry(JSON.stringify({ what_changed: "open-legacy" }), kek);
-  const doneCipher = await encryptEntry(JSON.stringify({ what_changed: "done-legacy" }), kek);
+  const openRaw = await encryptEntry(JSON.stringify({ what_changed: "open-legacy" }), kek);
+  const doneRaw = await encryptEntry(JSON.stringify({ what_changed: "done-legacy" }), kek);
+  const openCipher = { encrypted_content: openRaw.encryptedContent, encrypted_dek: openRaw.encryptedDek };
+  const doneCipher = { encrypted_content: doneRaw.encryptedContent, encrypted_dek: doneRaw.encryptedDek };
 
   const legacy = new LegacyLifeOpsDB(name);
   try {
@@ -131,8 +133,14 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
   const current = new LifeLogDB(name);
   try {
     const first = await current.life_ops.toArray();
+    const queue = await current.life_queue.toArray();
+    notes.push(`queue ids=${queue.map((row) => `${row.id}:${row.status}:${row.local_rev}`).join(",")}`);
     const open = first.find((row) => row.id === "op-open");
     const done = first.find((row) => row.id === "op-done");
+    const fbRow = queue.find((row) => row.id === "fb-open");
+    notes.push(
+      `cipher match=${String(open?.feedback_payload?.encrypted_content) === String(fbRow?.payload.encrypted_content)} opCt=${String(open?.feedback_payload?.encrypted_content ?? "").length} rowCt=${String(fbRow?.payload.encrypted_content ?? "").length}`,
+    );
     const dumped = JSON.stringify(first);
     const noIntent = !dumped.includes("intent_key") && !dumped.includes("PLAINTEXT_SHOULD_LEAVE");
     const idsKept = open?.owner_user_id === owner && done?.owner_user_id === owner && open?.feedback_id === "fb-open";
@@ -179,6 +187,55 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
   } finally {
     current.close();
     await Dexie.delete(name);
+  }
+}
+
+export async function runTwoIndependentStoreDelete(): Promise<{ ok: boolean; notes: string[] }> {
+  const notes: string[] = [];
+  if (typeof indexedDB === "undefined") {
+    return { ok: false, notes: ["indexedDB unavailable"] };
+  }
+  const owner = "iso-two-owner";
+  const aName = `lifelog-two-a-${crypto.randomUUID()}`;
+  const bName = `lifelog-two-b-${crypto.randomUUID()}`;
+  const a = new LifeLogDB(aName);
+  const b = new LifeLogDB(bName);
+  try {
+    const row = {
+      id: "e-del",
+      timestamp: "2026-09-19T10:00:00.000Z",
+      entry_type: "THOUGHT" as const,
+      encrypted_dek: "d",
+      encrypted_content: "KEEP_ME_OR_NOT",
+      tags: [],
+      created_at: "2026-09-19T10:00:00.000Z",
+      synced_from_offline: true,
+      version: 3,
+    };
+    const { persistServerEntries, applyEntryTombstones, enqueueEntry } = await import("../db/offlineQueue.ts");
+    await persistServerEntries([row], owner, a);
+    await persistServerEntries([row], owner, b);
+    notes.push(`seeded A=${Boolean(await a.entries.get("e-del"))} B=${Boolean(await b.entries.get("e-del"))}`);
+    await enqueueEntry({ ...row, deleted: true }, { owner, sessionId: 1 }, a);
+    const afterDelete = await a.entries.get("e-del");
+    notes.push(`A after local delete status=${afterDelete?.status} rev=${afterDelete?.local_rev}`);
+    const pendingB = await b.entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
+    notes.push(`B queue empty=${pendingB.filter((item) => item.owner_user_id === owner).length === 0}`);
+    await applyEntryTombstones([{ id: "e-del", version: 4 }], owner, b);
+    const gone = await b.entries.get("e-del");
+    await persistServerEntries([], owner, b);
+    const stillGone = await b.entries.get("e-del");
+    notes.push(`B after tombstone=${gone?.id ?? "missing"} after empty persist=${stillGone?.id ?? "missing"}`);
+    const ok = afterDelete?.status === "pending_delete" && !gone && !stillGone;
+    return { ok: Boolean(ok), notes };
+  } catch (e) {
+    notes.push((e as Error).message);
+    return { ok: false, notes };
+  } finally {
+    a.close();
+    b.close();
+    await Dexie.delete(aName);
+    await Dexie.delete(bName);
   }
 }
 

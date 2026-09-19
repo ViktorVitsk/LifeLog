@@ -44,6 +44,9 @@ jobs:
       - name: Typecheck
         working-directory: frontend
         run: npx tsc --noEmit
+      - name: Install component-test browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
       - name: Unit tests
         working-directory: frontend
         run: npm test

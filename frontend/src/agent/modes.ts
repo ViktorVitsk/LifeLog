@@ -23,7 +23,9 @@ export function allowedToolSet(mode: ChatMode): Set<string> {
   return new Set(MODE_TOOLS[mode]);
 }
 
-export function toolsForMode(provider: "openrouter" | "ollama", mode: ChatMode): ToolDef[] {
+export type ReviewPeriod = "1d" | "7d" | "envelope";
+
+export function toolsForMode(provider: "openrouter" | "ollama" | "synthetic", mode: ChatMode): ToolDef[] {
   const allow = allowedToolSet(mode);
   return toolsForProvider(provider).filter((tool) => allow.has(tool.function.name));
 }
@@ -44,6 +46,13 @@ export function buildReviewBriefing(args: {
   snapshot: unknown;
   dueActionIds: string[];
   periodLabel: string;
+  period?: ReviewPeriod;
+  windowStart?: string;
+  windowEnd?: string;
+  entries?: { id: string; timestamp: string; entry_type: string; mood_score?: number | null }[];
+  goals?: { id: string; state: string; title?: string }[];
+  actions?: { id: string; state: string; goal_id?: string; result_metric?: string | null; review_at?: string | null }[];
+  feedback?: { action_id: string; outcome_kind: string }[];
 }): Record<string, unknown> {
   const snap = args.snapshot as {
     counts?: { today?: number };
@@ -52,24 +61,51 @@ export function buildReviewBriefing(args: {
     gaps?: string[];
     habits?: { name: string; logged: boolean; completed: boolean }[];
   };
+  const entries = args.entries ?? [];
+  const byType: Record<string, number> = {};
+  const days = new Set<string>();
+  const moods: number[] = [];
+  for (const e of entries) {
+    byType[e.entry_type] = (byType[e.entry_type] ?? 0) + 1;
+    days.add(e.timestamp.slice(0, 10));
+    if (typeof e.mood_score === "number") moods.push(e.mood_score);
+  }
+  const coverage = {
+    days_with_entries: days.size,
+    note: "A day without a row is a gap, not a failure.",
+  };
+  const shifts =
+    moods.length >= 2
+      ? { mood_first: moods[0], mood_last: moods[moods.length - 1], n: moods.length }
+      : null;
   return {
     period: args.periodLabel,
+    period_kind: args.period ?? "1d",
     local_day: args.localDay,
+    window: { start: args.windowStart ?? null, end: args.windowEnd ?? null },
     recorded: {
-      entry_count: snap.counts?.today ?? 0,
+      entry_count: entries.length || (snap.counts?.today ?? 0),
+      by_type: byType,
       averages: snap.averages ?? {},
       sleep: snap.sleep ?? null,
       habits: (snap.habits ?? []).filter((h) => h.logged),
+      metric_shifts: shifts,
+      goals: args.goals ?? [],
+      actions: args.actions ?? [],
+      feedback: args.feedback ?? [],
     },
     hypothesized: [],
-    missing: snap.gaps ?? [],
+    missing: {
+      snapshot_gaps: snap.gaps ?? [],
+      coverage,
+    },
     next_step_choices: [
       "log a missing item",
       "accept or reject a memory card",
       "review a due action",
     ],
     due_action_ids: args.dueActionIds,
-    note: "This briefing is assembled by the app from open fields. The model may not invent extra recorded facts.",
+    note: "This briefing is assembled by the app from open fields. The model may not invent extra recorded facts. Absence of a log is not a failed day.",
   };
 }
 

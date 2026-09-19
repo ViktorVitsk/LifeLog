@@ -28,7 +28,7 @@ export interface LifeProposal {
   body: Record<string, unknown>;
 }
 
-export type LlmProviderId = "openrouter" | "ollama";
+export type LlmProviderId = "openrouter" | "ollama" | "synthetic";
 
 export interface LlmSettings {
   provider: LlmProviderId;

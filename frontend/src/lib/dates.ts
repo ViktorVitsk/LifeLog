@@ -105,9 +105,46 @@ function shiftCivilDay(day: string, delta: number): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Approximate 20:00 yesterday in the account zone — not an exact event timestamp. */
 export function yesterdayEvening(now = new Date(), timeZone = getAccountTimeZone()): Date {
   const today = calendarDayKey(now, timeZone);
   return zonedWallTimeToUtc(shiftCivilDay(today, -1), 20, 0, timeZone);
+}
+
+export function approximateYesterdayEvening(
+  now = new Date(),
+  timeZone = getAccountTimeZone(),
+): { at: Date; approximate: true } {
+  return { at: yesterdayEvening(now, timeZone), approximate: true };
+}
+
+/** Wake wall-clock on the wake calendar day becomes the SLEEP event timestamp. */
+export function wakeTimestamp(
+  wakeDay: string,
+  wakeTime: string,
+  timeZone = getAccountTimeZone(),
+): string {
+  const match = wakeTime.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) throw new Error("invalid_wake_time");
+  return zonedWallTimeToUtc(wakeDay, Number(match[1]), Number(match[2]), timeZone).toISOString();
+}
+
+export function sleepEventTimestamp(args: {
+  wakeDate?: string;
+  wakeTime?: string;
+  fallback?: string;
+  timeZone?: string;
+}): string | undefined {
+  const zone = args.timeZone ?? getAccountTimeZone();
+  if (args.wakeTime && args.wakeTime.includes("T")) return args.wakeTime;
+  if (args.wakeTime && args.wakeDate) {
+    try {
+      return wakeTimestamp(args.wakeDate, args.wakeTime, zone);
+    } catch {
+      return args.fallback;
+    }
+  }
+  return args.fallback;
 }
 
 export const COMMON_TIMEZONES = [

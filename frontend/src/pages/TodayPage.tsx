@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listPinnedCharts, loadThreadForDay, saveThreadMessage } from "../agent/chatStore";
 import { commitProposedEntry } from "../agent/commit";
@@ -31,7 +31,12 @@ import { useEntries } from "../hooks/useEntries";
 import { useIsMdUp } from "../hooks/useIsMdUp";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { api } from "../lib/api";
-import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
+import { getSessionId, isCurrentSession } from "../lib/accountScope";
+import { now } from "../lib/clock";
+import { encryptLifePayload, enqueueLife } from "../lib/lifeQueue";
+import { flushLifeQueue } from "../lib/lifeStore";
+import { useMergedLife } from "../hooks/useMergedLife";
+import type { ReviewPeriod } from "../agent/modes";
 
 export default function TodayPage() {
   const { kek, token, userId } = useAuth();
@@ -45,11 +50,8 @@ export default function TodayPage() {
 
   const skillsQ = useSkills();
   const habitsQ = useHabits();
-  const lifeQ = useQuery({
-    queryKey: ["life", userId],
-    enabled: Boolean(token && userId),
-    queryFn: () => api.getLife(token!),
-  });
+  const life = useMergedLife();
+  const [reviewPeriod, setReviewPeriod] = useState<ReviewPeriod>("1d");
 
   const [settings, setSettings] = useState<LlmSettings>({ ...DEFAULT_LLM_SETTINGS });
   const [thread, setThread] = useState<ThreadMessage[]>([]);
@@ -78,9 +80,15 @@ export default function TodayPage() {
 
   useEffect(() => {
     if (!kek || !userId) return;
-    void loadLlmSettings(kek).then(setSettings);
-    void loadThreadForDay(kek).then(setThread);
+    const session = getSessionId();
+    void loadLlmSettings(kek).then((next) => {
+      if (isCurrentSession(session)) setSettings(next);
+    });
+    void loadThreadForDay(kek).then((next) => {
+      if (isCurrentSession(session)) setThread(next);
+    });
     void listPinnedCharts().then((rows) => {
+      if (!isCurrentSession(session)) return;
       const specs: ChartSpec[] = [];
       for (const r of rows) {
         try {
@@ -96,6 +104,15 @@ export default function TodayPage() {
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [thread, draft, tools]);
+
+  useEffect(() => {
+    if (!life.dueAt) return;
+    const ms = Math.max(250, life.dueAt.getTime() - now().getTime());
+    const timer = window.setTimeout(() => {
+      void qc.invalidateQueries({ queryKey: ["life", userId] });
+    }, ms);
+    return () => window.clearTimeout(timer);
+  }, [life.dueAt, qc, userId]);
 
   useEffect(() => {
     if (!undo) return;
@@ -137,6 +154,7 @@ export default function TodayPage() {
     const ac = new AbortController();
     abortRef.current = ac;
     const gen = runGen.current;
+    const session = getSessionId();
 
     const userMsg: ThreadMessage = {
       id: crypto.randomUUID(),
@@ -172,8 +190,10 @@ export default function TodayPage() {
         provider: settings.provider,
       },
       mode,
-      dueActionIds: lifeQ.data?.due_action_ids ?? [],
-      knownIds: new Set((lifeQ.data?.goals ?? []).map((g) => g.id)),
+      reviewPeriod,
+      dueActionIds: life.bundle.due_action_ids,
+      lifeBundle: life.bundle,
+      knownIds: new Set(life.bundle.goals.map((g) => g.id)),
     };
 
     setBusy(true);
@@ -206,7 +226,7 @@ export default function TodayPage() {
         },
       });
 
-      if (gen !== runGen.current) return;
+      if (gen !== runGen.current || !isCurrentSession(session)) return;
 
       const asst: ThreadMessage = {
         id: crypto.randomUUID(),
@@ -227,7 +247,7 @@ export default function TodayPage() {
       setTools([]);
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
-      if (gen !== runGen.current) return;
+      if (gen !== runGen.current || !isCurrentSession(session)) return;
       setErr((e as Error).message);
     } finally {
       if (gen === runGen.current) setBusy(false);
@@ -324,28 +344,41 @@ export default function TodayPage() {
         statement: card.body.statement,
         sensitive_grounds: card.body.grounds ?? "",
       });
-      await enqueueLife("memory", {
-        id: card.id,
-        kind: card.body.kind ?? "hypothesis",
-        state: "accepted",
-        origin: "agent",
-        entry_ids: card.body.entry_ids ?? [],
-        reviewed_at: new Date().toISOString(),
-        ...blob,
-      });
+      await enqueueLife(
+        "memory",
+        {
+          id: card.id,
+          kind: card.body.kind ?? "hypothesis",
+          state: "accepted",
+          origin: "agent",
+          entry_ids: card.body.entry_ids ?? [],
+          reviewed_at: new Date().toISOString(),
+          encrypted_dek: blob.encrypted_dek,
+          encrypted_content: blob.encrypted_content,
+        },
+        blob.scope,
+      );
     } else {
       const blob = await encryptLifePayload(kek, {
         proposal: card.body.proposal,
         grounds: card.body.grounds ?? "",
         chosen_try: card.body.proposal,
       });
-      await enqueueLife("action", {
-        id: card.id,
-        goal_id: card.body.goal_id,
-        state: "accepted",
-        result_metric: card.body.result_metric ?? null,
-        ...blob,
-      });
+      const review = new Date();
+      review.setDate(review.getDate() + 7);
+      await enqueueLife(
+        "action",
+        {
+          id: card.id,
+          goal_id: card.body.goal_id,
+          state: "accepted",
+          result_metric: card.body.result_metric ?? null,
+          review_at: typeof card.body.review_at === "string" ? card.body.review_at : review.toISOString(),
+          encrypted_dek: blob.encrypted_dek,
+          encrypted_content: blob.encrypted_content,
+        },
+        blob.scope,
+      );
     }
     await flushLifeQueue(token, userId);
     rewriteMessage(msgId, (m) => ({
@@ -379,9 +412,9 @@ export default function TodayPage() {
       <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 space-y-4">
         <Briefing entries={entries} skills={skills} habits={habits} pinned={pinned} />
 
-        {(lifeQ.data?.due_action_ids?.length ?? 0) > 0 && (
+        {life.bundle.due_action_ids.length > 0 && (
           <div className="rounded-lg border border-amber-800 bg-amber-950/30 text-amber-100 text-sm p-3">
-            {t.dueActionReminder.replace("{n}", String(lifeQ.data?.due_action_ids.length ?? 0))}
+            {t.dueActionReminder.replace("{n}", String(life.bundle.due_action_ids.length))}
           </div>
         )}
 
@@ -399,6 +432,22 @@ export default function TodayPage() {
             </button>
           ))}
         </div>
+        {mode === "review" && (
+          <div className="flex flex-wrap gap-1">
+            {(["1d", "7d", "envelope"] as ReviewPeriod[]).map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setReviewPeriod(item)}
+                className={`min-h-[32px] px-2 rounded-full text-[11px] border ${
+                  reviewPeriod === item ? "bg-zinc-700 border-zinc-500" : "border-zinc-800 text-zinc-400"
+                }`}
+              >
+                {item === "1d" ? t.reviewPeriod1d : item === "7d" ? t.reviewPeriod7d : t.reviewPeriodEnvelope}
+              </button>
+            ))}
+          </div>
+        )}
 
         {needsSetup && (
           <div className="rounded-lg border border-amber-800 bg-amber-950/30 text-amber-100 text-sm p-3">

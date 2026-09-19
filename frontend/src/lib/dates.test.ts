@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { calendarDayKey, entryCalendarDay, yesterdayEvening } from "./dates.ts";
+import {
+  approximateYesterdayEvening,
+  calendarDayKey,
+  entryCalendarDay,
+  sleepEventTimestamp,
+  wakeTimestamp,
+  yesterdayEvening,
+} from "./dates.ts";
 
 describe("B3 calendar days", () => {
   it("uses the account zone, not UTC", () => {
@@ -20,5 +27,16 @@ describe("B3 calendar days", () => {
     const event = yesterdayEvening(now, "Europe/Moscow");
     assert.equal(calendarDayKey(event, "Europe/Moscow"), "2026-09-18");
     assert.notEqual(event.toISOString(), now.toISOString());
+    assert.equal(approximateYesterdayEvening(now, "Europe/Moscow").approximate, true);
+  });
+
+  it("writes sleep timestamp as wake in the account zone, even across midnight", () => {
+    const ts = wakeTimestamp("2026-09-19", "07:30", "Europe/Moscow");
+    assert.equal(calendarDayKey(ts, "Europe/Moscow"), "2026-09-19");
+    assert.equal(sleepEventTimestamp({ wakeDate: "2026-09-19", wakeTime: "07:30", timeZone: "Europe/Moscow" }), ts);
+    assert.equal(
+      sleepEventTimestamp({ wakeTime: "2026-09-19T04:30:00.000Z" }),
+      "2026-09-19T04:30:00.000Z",
+    );
   });
 });

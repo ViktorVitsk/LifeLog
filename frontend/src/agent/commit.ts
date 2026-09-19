@@ -1,4 +1,5 @@
 import { encryptAndEnqueue } from "../lib/entrySubmit";
+import { localDayKey, sleepEventTimestamp } from "../lib/dates";
 import type { AppCommitMeta } from "./confirmation";
 import { requireAppConfirmation } from "./confirmation";
 import type { AppLocale } from "../i18n/locale";
@@ -69,7 +70,11 @@ export async function commitProposedEntry(
       return encryptAndEnqueue({
         kek,
         entry_type: p.entry_type,
-        timestamp: p.wake_time && p.wake_time.includes("T") ? p.wake_time : ts,
+        timestamp: sleepEventTimestamp({
+          wakeTime: p.wake_time,
+          wakeDate: p.timestamp && /^\d{4}-\d{2}-\d{2}$/.test(p.timestamp) ? p.timestamp : localDayKey(),
+          fallback: ts,
+        }),
         plaintext: {
           bedtime: p.bedtime,
           wake_time: p.wake_time,

@@ -1,8 +1,8 @@
-import { decryptEntry } from "../lib/crypto";
-import type { Habit, Skill } from "../lib/api";
-import type { MergedEntry } from "../hooks/useEntries";
-import { pinChartSpec } from "./chatStore";
-import { normalizeProposal } from "./normalizeProposal";
+import { decryptEntry } from "../lib/crypto.ts";
+import type { Habit, Skill } from "../lib/api.ts";
+import type { MergedEntry } from "../hooks/useEntries.ts";
+import { pinChartSpec } from "./chatStore.ts";
+import { normalizeProposal } from "./normalizeProposal.ts";
 import {
   canDecryptEntry,
   filterByWindow,
@@ -17,13 +17,15 @@ import {
   type ContextBudget,
   type ContextEnvelope,
   type RunContextAudit,
-} from "./contextEnvelope";
-import { isModelWriteTool, modelWriteBlockedResult } from "./persistPolicy";
-import { parseJsonObject, validateToolArgs } from "./toolArgs";
-import { buildTodaySnapshot } from "./snapshot";
-import { isToolAllowed, type ChatMode } from "./modes";
-import type { ChartPeriod, ChartSpec, LifeProposal, LlmSettings, ProposedEntry } from "./types";
-import type { AppLocale } from "../i18n/locale";
+} from "./contextEnvelope.ts";
+import { isModelWriteTool, modelWriteBlockedResult } from "./persistPolicy.ts";
+import { parseJsonObject, validateToolArgs } from "./toolArgs.ts";
+import { buildTodaySnapshot } from "./snapshot.ts";
+import { isToolAllowed, type ChatMode } from "./modes.ts";
+import type { ChartPeriod, ChartSpec, LifeProposal, LlmSettings, ProposedEntry } from "./types.ts";
+import type { AppLocale } from "../i18n/locale.ts";
+import type { LifeBundle } from "../lib/api.ts";
+import { isAllowedId, type TypedIds } from "../lib/personalContext.ts";
 
 export interface ToolRuntime {
   kek: CryptoKey;
@@ -41,8 +43,11 @@ export interface ToolRuntime {
   mode?: ChatMode;
   allowedTools?: Set<string>;
   knownIds?: Set<string>;
+  typedIds?: TypedIds;
   dueActionIds?: string[];
   lifeProposals?: LifeProposal[];
+  lifeBundle?: LifeBundle;
+  reviewPeriod?: "1d" | "7d" | "envelope";
 }
 
 function asChartSpec(args: Record<string, unknown>, envelope: ContextEnvelope): ChartSpec {
@@ -246,9 +251,10 @@ export async function executeTool(
       return packed.truncated ? JSON.parse(packed.json) : payload;
     }
     case "propose_memory": {
-      const known = rt.knownIds ?? new Set<string>();
       const entryIds = Array.isArray(args.entry_ids)
-        ? args.entry_ids.filter((id): id is string => typeof id === "string" && known.has(id))
+        ? args.entry_ids.filter((id): id is string =>
+            rt.typedIds ? isAllowedId(rt.typedIds, "entries", id) : Boolean(rt.knownIds?.has(id)),
+          )
         : [];
       const card: LifeProposal = {
         id: crypto.randomUUID(),
@@ -268,11 +274,21 @@ export async function executeTool(
       };
     }
     case "propose_action": {
-      const known = rt.knownIds ?? new Set<string>();
-      const goalId = typeof args.goal_id === "string" && known.has(args.goal_id) ? args.goal_id : null;
+      const goalId =
+        rt.typedIds
+          ? isAllowedId(rt.typedIds, "goals", args.goal_id)
+            ? args.goal_id
+            : null
+          : typeof args.goal_id === "string" && rt.knownIds?.has(args.goal_id)
+            ? args.goal_id
+            : null;
       if (!goalId) {
-        return { error: "unknown_goal", hint: "Cite a real goal id from the snapshot." };
+        return { error: "unknown_goal", hint: "Cite a real goal id from the personal context, not a habit id." };
       }
+      const review =
+        typeof args.review_at === "string" && args.review_at
+          ? args.review_at
+          : new Date(Date.now() + 7 * 86400000).toISOString();
       const card: LifeProposal = {
         id: crypto.randomUUID(),
         kind: "action",
@@ -282,6 +298,7 @@ export async function executeTool(
           proposal: args.proposal,
           grounds: args.grounds,
           result_metric: args.result_metric,
+          review_at: review,
         },
       };
       rt.lifeProposals = [...(rt.lifeProposals ?? []), card];

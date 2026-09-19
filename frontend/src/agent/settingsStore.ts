@@ -47,7 +47,9 @@ export async function saveLlmSettings(settings: LlmSettings, kek: CryptoKey): Pr
       settings.base_url.trim() ||
       (settings.provider === "ollama"
         ? "http://localhost:11434/v1"
-        : "https://openrouter.ai/api/v1"),
+        : settings.provider === "synthetic"
+          ? "synthetic://local"
+          : "https://openrouter.ai/api/v1"),
     context_policy: settings.context_policy,
     decrypt_n: Math.max(1, Math.min(20, settings.decrypt_n || 5)),
     encrypted_api_key,
@@ -58,6 +60,9 @@ export async function saveLlmSettings(settings: LlmSettings, kek: CryptoKey): Pr
 
 export async function probeLlm(settings: LlmSettings): Promise<{ ok: boolean; detail: string }> {
   try {
+    if (settings.provider === "synthetic") {
+      return { ok: true, detail: "Synthetic in-process completeChat" };
+    }
     if (settings.provider === "ollama") {
       const root = settings.base_url.replace(/\/v1\/?$/, "");
       const res = await fetch(`${root}/api/tags`);

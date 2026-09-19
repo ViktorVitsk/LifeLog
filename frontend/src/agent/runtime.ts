@@ -1,18 +1,20 @@
-import { completeChat } from "./providers";
-import { buildTodaySnapshot } from "./snapshot";
-import { normalizeProposal } from "./normalizeProposal";
+import { completeChat } from "./providers.ts";
+import { buildTodaySnapshot } from "./snapshot.ts";
+import { normalizeProposal } from "./normalizeProposal.ts";
 import {
   filterEntriesForPolicy,
   finishRunAudit,
   policyPromptLine,
   resolveContextEnvelope,
   type ContextBudget,
-} from "./contextEnvelope";
-import { executeTool, extractFallbackProposals, type ToolRuntime } from "./tools";
-import type { AppLocale } from "../i18n/locale";
-import type { ChatCompletionMessage, ChartSpec, ChatMode, LifeProposal, LlmSettings, ProposedEntry, ToolCall } from "./types";
-import type { RunContextAudit } from "./contextEnvelope";
-import { buildReviewBriefing, modeSystemPrompt, stripUnknownIds, toolsForMode } from "./modes";
+} from "./contextEnvelope.ts";
+import { executeTool, extractFallbackProposals, type ToolRuntime } from "./tools.ts";
+import type { AppLocale } from "../i18n/locale.ts";
+import type { ChatCompletionMessage, ChartSpec, ChatMode, LifeProposal, LlmSettings, ProposedEntry, ToolCall } from "./types.ts";
+import type { RunContextAudit } from "./contextEnvelope.ts";
+import { buildReviewBriefing, modeSystemPrompt, stripUnknownIds, toolsForMode } from "./modes.ts";
+import { assembleAllowedPersonalContext } from "../lib/personalContext.ts";
+import { getAccountTimeZone, startOfLocalDay } from "../lib/dates.ts";
 
 function markTool(
   trace: AgentRunResult["tools"],
@@ -89,28 +91,74 @@ export async function runAgent(args: {
     habits: args.rt.habits,
     locale: args.locale,
   });
+  const personal = await assembleAllowedPersonalContext({
+    bundle: args.rt.lifeBundle,
+    entries: scoped,
+    policy: envelope.policy,
+    kek: args.rt.kek,
+    decryptLimit: args.settings.decrypt_n,
+  });
   const known = new Set<string>([
-    ...scoped.map((e) => e.id),
+    ...personal.allIds,
     ...args.rt.skills.map((s) => s.id),
     ...args.rt.habits.map((h) => h.id),
-    ...(args.rt.knownIds ?? []),
   ]);
   args.rt.knownIds = known;
+  args.rt.typedIds = personal.ids;
   const tools = toolsForMode(args.settings.provider, mode);
   const policy = policyPromptLine(envelope, args.locale === "en" ? "en" : "ru");
+  const period = args.rt.reviewPeriod ?? "1d";
+  const tz = getAccountTimeZone();
+  const todayStart = startOfLocalDay(envelope.windowEnd, tz);
+  const periodStart =
+    period === "1d"
+      ? todayStart
+      : period === "7d"
+        ? new Date(todayStart.getTime() - 6 * 24 * 3600_000)
+        : envelope.windowStart;
+  const windowStart = new Date(Math.max(periodStart.getTime(), envelope.windowStart.getTime()));
+  const periodEntries = scoped.filter((e) => {
+    const t = Date.parse(e.timestamp);
+    return Number.isFinite(t) && t >= windowStart.getTime() && t <= envelope.windowEnd.getTime();
+  });
   const briefing =
     mode === "review"
       ? buildReviewBriefing({
           localDay: snapshot.local_day,
           snapshot,
-          dueActionIds: args.rt.dueActionIds ?? [],
-          periodLabel: snapshot.local_day,
+          dueActionIds: args.rt.dueActionIds ?? args.rt.lifeBundle?.due_action_ids ?? [],
+          periodLabel: period === "1d" ? snapshot.local_day : period,
+          period,
+          windowStart: windowStart.toISOString(),
+          windowEnd: envelope.windowEnd.toISOString(),
+          entries: periodEntries.map((e) => ({
+            id: e.id,
+            timestamp: e.timestamp,
+            entry_type: e.entry_type,
+            mood_score: e.mood_score,
+          })),
+          goals: personal.sent.goals.map((g) => ({
+            id: String(g.id),
+            state: String(g.state ?? ""),
+            title: typeof g.title === "string" ? g.title : undefined,
+          })),
+          actions: personal.sent.actions.map((a) => ({
+            id: String(a.id),
+            state: String(a.state ?? ""),
+            goal_id: typeof a.goal_id === "string" ? a.goal_id : undefined,
+            result_metric: typeof a.result_metric === "string" ? a.result_metric : null,
+            review_at: typeof a.review_at === "string" ? a.review_at : null,
+          })),
+          feedback: (args.rt.lifeBundle?.feedback ?? []).map((f) => ({
+            action_id: f.action_id,
+            outcome_kind: f.outcome_kind,
+          })),
         })
       : null;
   const messages: ChatCompletionMessage[] = [
     {
       role: "system",
-      content: `${buildSystemPrompt(args.locale, mode)}\n\n${policy}\n\nToday snapshot (open metrics only):\n${JSON.stringify(snapshot)}${
+      content: `${buildSystemPrompt(args.locale, mode)}\n\n${policy}\n\nToday snapshot (open metrics only):\n${JSON.stringify(snapshot)}\n\nAllowed personal context (cite only these ids):\n${personal.promptBlock}${
         briefing ? `\n\nDeterministic review briefing:\n${JSON.stringify(briefing)}` : ""
       }`,
     },
@@ -195,13 +243,15 @@ export async function runAgent(args: {
     }
   }
 
+  const audit = finishRunAudit(args.rt.budget);
+  if (personal.sentPlaintext) audit.sent_plaintext_to_model = true;
   return {
-    assistantText: stripUnknownIds(assistantText.trim(), args.rt.knownIds ?? []),
+    assistantText: stripUnknownIds(assistantText.trim(), personal.allIds),
     proposals: [...args.rt.proposals.values()],
     lifeProposals: args.rt.lifeProposals ?? [],
     charts: args.rt.charts,
     committedIds: [],
     tools: toolTrace,
-    contextAudit: finishRunAudit(args.rt.budget),
+    contextAudit: audit,
   };
 }

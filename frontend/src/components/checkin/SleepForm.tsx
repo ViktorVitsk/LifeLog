@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useLocale } from "../../context/LocaleContext";
 import { encryptAndEnqueue } from "../../lib/entrySubmit";
+import { localDayKey, sleepEventTimestamp } from "../../lib/dates";
 import Slider from "../ui/Slider";
 
 export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) {
@@ -10,6 +11,7 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
   const [sleepHours, setSleepHours] = useState(7.5);
   const [sleepQuality, setSleepQuality] = useState(7);
   const [bedtime, setBedtime] = useState("");
+  const [wakeDate, setWakeDate] = useState(() => localDayKey());
   const [wakeTime, setWakeTime] = useState("");
   const [dreamNotes, setDreamNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -20,12 +22,18 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
     setBusy(true);
     setErr(null);
     try {
+      const timestamp = sleepEventTimestamp({
+        wakeDate,
+        wakeTime: wakeTime || undefined,
+      });
       await encryptAndEnqueue({
         kek,
         entry_type: "SLEEP",
+        timestamp,
         plaintext: {
           bedtime: bedtime || undefined,
-          wake_time: wakeTime || undefined,
+          wake_time: timestamp ?? (wakeTime || undefined),
+          wake_date: wakeDate,
           dream_notes: dreamNotes || undefined,
         },
         openFields: {
@@ -61,7 +69,16 @@ export default function SleepForm({ onSubmitted }: { onSubmitted: () => void }) 
       </div>
       <Slider label={t.sleepQuality} value={sleepQuality} onChange={setSleepQuality} />
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="text-sm text-zinc-300">{t.wakeDate}</label>
+          <input
+            type="date"
+            value={wakeDate}
+            onChange={(e) => setWakeDate(e.target.value)}
+            className="mt-1 w-full rounded bg-zinc-900 border border-zinc-700 px-3 py-2"
+          />
+        </div>
         <div>
           <label className="text-sm text-zinc-300">{t.bedtime}</label>
           <input

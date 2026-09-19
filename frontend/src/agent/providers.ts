@@ -1,4 +1,5 @@
-import type { ChatCompletionMessage, LlmSettings, ToolCall, ToolDef } from "./types";
+import type { ChatCompletionMessage, LlmSettings, ToolCall, ToolDef } from "./types.ts";
+import { defaultSyntheticHandler } from "./syntheticScript.ts";
 
 export interface ChatChunk {
   content?: string;
@@ -12,6 +13,23 @@ export interface PartialToolCall {
   function?: { name?: string; arguments?: string };
 }
 
+export type SyntheticChatHandler = (args: {
+  settings: LlmSettings;
+  messages: ChatCompletionMessage[];
+  tools: ToolDef[];
+  stream: boolean;
+}) => Promise<{ content: string; tool_calls: ToolCall[] }> | { content: string; tool_calls: ToolCall[] };
+
+let syntheticHandler: SyntheticChatHandler | null = null;
+
+export function setSyntheticChatHandler(handler: SyntheticChatHandler | null): void {
+  syntheticHandler = handler;
+}
+
+export function getSyntheticChatHandler(): SyntheticChatHandler | null {
+  return syntheticHandler;
+}
+
 export async function completeChat(args: {
   settings: LlmSettings;
   messages: ChatCompletionMessage[];
@@ -20,6 +38,18 @@ export async function completeChat(args: {
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
 }): Promise<{ content: string; tool_calls: ToolCall[] }> {
+  if (args.settings.provider === "synthetic") {
+    const handler = syntheticHandler ?? defaultSyntheticHandler;
+    const out = await handler({
+      settings: args.settings,
+      messages: args.messages,
+      tools: args.tools,
+      stream: args.stream,
+    });
+    if (out.content && args.onDelta) args.onDelta(out.content);
+    return { content: out.content ?? "", tool_calls: out.tool_calls ?? [] };
+  }
+
   const url = `${args.settings.base_url.replace(/\/$/, "")}/chat/completions`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

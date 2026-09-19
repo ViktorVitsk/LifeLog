@@ -47,8 +47,28 @@ describe("D chat modes", () => {
     });
     assert.equal((briefing.recorded as { entry_count: number }).entry_count, 2);
     assert.deepEqual(briefing.hypothesized, []);
-    assert.deepEqual(briefing.missing, ["sleep"]);
+    assert.deepEqual((briefing.missing as { snapshot_gaps: string[] }).snapshot_gaps, ["sleep"]);
     assert.deepEqual(briefing.due_action_ids, ["act-1"]);
+  });
+
+  it("covers a multi-day window without treating gaps as failure", () => {
+    const briefing = buildReviewBriefing({
+      localDay: "2026-09-19",
+      periodLabel: "7d",
+      period: "7d",
+      dueActionIds: [],
+      snapshot: { counts: { today: 1 }, averages: {}, gaps: [] },
+      entries: [
+        { id: "1", timestamp: "2026-09-18T10:00:00.000Z", entry_type: "THOUGHT", mood_score: 6 },
+        { id: "2", timestamp: "2026-09-19T10:00:00.000Z", entry_type: "THOUGHT", mood_score: 8 },
+      ],
+      goals: [{ id: "g1", state: "active", title: "Sleep" }],
+      actions: [{ id: "a1", state: "completed", goal_id: "g1" }],
+      feedback: [{ action_id: "a1", outcome_kind: "tried_helped" }],
+    });
+    assert.equal((briefing.recorded as { entry_count: number }).entry_count, 2);
+    assert.deepEqual(briefing.hypothesized, []);
+    assert.match(JSON.stringify(briefing.missing), /not a failure/);
   });
 
   it("tells the model not to invent helplines or widen tools", () => {

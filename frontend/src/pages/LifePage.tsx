@@ -1,15 +1,33 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import CipherCard, { useDecryptedMap } from "../components/CipherCard";
 import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { useSync } from "../context/SyncContext";
 import { useHabits } from "../hooks/useCatalog";
-import { api } from "../lib/api";
-import { decryptEntry } from "../lib/crypto";
+import { useMergedLife } from "../hooks/useMergedLife";
+import type { LifeActionRead, LifeGoalRead, LifeMemoryRead } from "../lib/api";
 import { encryptLifePayload, enqueueLife, flushLifeQueue } from "../lib/lifeStore";
+import { queueSyncLabel } from "../lib/mergeLife";
+import type { SaveScope } from "../lib/accountScope";
+import type { TStrings } from "../i18n/strings";
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+function plusDays(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+function outcomeLabel(kind: string, t: TStrings): string {
+  if (kind === "not_tried") return t.outcomeNotTried;
+  if (kind === "not_suitable") return t.outcomeNotSuitable;
+  if (kind === "tried_no_effect") return t.outcomeNoEffect;
+  if (kind === "tried_helped") return t.outcomeHelped;
+  return kind;
 }
 
 export default function LifePage() {
@@ -18,6 +36,8 @@ export default function LifePage() {
   const { trigger } = useSync();
   const qc = useQueryClient();
   const habits = useHabits().data ?? [];
+  const { bundle, statuses } = useMergedLife();
+  const goalPlain = useDecryptedMap(bundle.goals, kek);
   const [msg, setMsg] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [why, setWhy] = useState("");
@@ -27,25 +47,50 @@ export default function LifePage() {
   const [statement, setStatement] = useState("");
   const [proposal, setProposal] = useState("");
   const [goalForAction, setGoalForAction] = useState("");
+  const [resultMetric, setResultMetric] = useState("");
+  const [reviewAt, setReviewAt] = useState(() => plusDays(7).slice(0, 10));
 
-  const lifeQuery = useQuery({
-    queryKey: ["life", userId],
-    enabled: Boolean(token && userId),
-    queryFn: () => api.getLife(token!),
-  });
-  const bundle = lifeQuery.data;
-
-  async function persist(kind: "goal" | "memory" | "action" | "feedback", payload: Record<string, unknown>) {
+  async function persist(
+    kind: "goal" | "memory" | "action" | "feedback",
+    payload: Record<string, unknown>,
+    scope?: SaveScope,
+  ) {
     if (!kek) {
       setMsg(t.unlockForExport);
       return;
     }
-    await enqueueLife(kind, payload);
-    if (token && userId) {
-      await flushLifeQueue(token, userId);
+    await enqueueLife(kind, payload, scope);
+    if (token && userId && (typeof navigator === "undefined" || navigator.onLine)) {
+      try {
+        await flushLifeQueue(token, userId);
+      } catch {
+        /* stay local */
+      }
       await qc.invalidateQueries({ queryKey: ["life", userId] });
       trigger();
     }
+  }
+
+  function badge(id: string) {
+    const status = statuses.get(id);
+    const label = status ? queueSyncLabel(status) : "synced";
+    const text =
+      label === "synced"
+        ? t.onServer
+        : label === "rejected"
+          ? t.rejected
+          : label === "conflict"
+            ? t.syncConflict
+            : label === "error"
+              ? t.syncError
+              : t.onDevice;
+    const cls =
+      label === "synced"
+        ? "text-emerald-400"
+        : label === "rejected" || label === "conflict" || label === "error"
+          ? "text-rose-300"
+          : "text-amber-200";
+    return <span className={`text-[11px] ${cls}`}>{text}</span>;
   }
 
   async function onCreateGoal() {
@@ -59,14 +104,19 @@ export default function LifePage() {
       next_step: nextStep.trim(),
       values: [],
     });
-    await persist("goal", {
-      id: newId(),
-      state: "active",
-      habit_ids: habitId ? [habitId] : [],
-      skill_ids: [],
-      entry_ids: [],
-      ...blob,
-    });
+    await persist(
+      "goal",
+      {
+        id: newId(),
+        state: "active",
+        habit_ids: habitId ? [habitId] : [],
+        skill_ids: [],
+        entry_ids: [],
+        encrypted_dek: blob.encrypted_dek,
+        encrypted_content: blob.encrypted_content,
+      },
+      blob.scope,
+    );
     setTitle("");
     setWhy("");
     setEnough("");
@@ -77,60 +127,126 @@ export default function LifePage() {
   async function onCreateMemory() {
     if (!kek || !statement.trim()) return;
     const blob = await encryptLifePayload(kek, { statement: statement.trim(), sensitive_grounds: "" });
-    await persist("memory", {
-      id: newId(),
-      kind: "preference",
-      state: "proposed",
-      origin: "user",
-      entry_ids: [],
-      ...blob,
-    });
+    await persist(
+      "memory",
+      {
+        id: newId(),
+        kind: "preference",
+        state: "proposed",
+        origin: "user",
+        entry_ids: [],
+        encrypted_dek: blob.encrypted_dek,
+        encrypted_content: blob.encrypted_content,
+      },
+      blob.scope,
+    );
     setStatement("");
     setMsg(t.lifeMemorySaved);
   }
 
-  async function onAcceptMemory(id: string, version: number, kind: string, origin: string, entry_ids: string[], dek: string, ct: string) {
-    await persist("memory", {
-      id,
-      kind,
-      state: "accepted",
-      origin,
-      entry_ids,
-      encrypted_dek: dek,
-      encrypted_content: ct,
-      version,
-      reviewed_at: new Date().toISOString(),
-    });
-    setMsg(t.lifeMemoryAccepted);
+  async function writeMemory(m: LifeMemoryRead, patch: Record<string, unknown>, body?: Record<string, unknown>) {
+    if (!kek) return;
+    let dek = m.encrypted_dek;
+    let ct = m.encrypted_content;
+    let scope: SaveScope | undefined;
+    if (body) {
+      const blob = await encryptLifePayload(kek, body);
+      dek = blob.encrypted_dek;
+      ct = blob.encrypted_content;
+      scope = blob.scope;
+    }
+    await persist(
+      "memory",
+      {
+        id: m.id,
+        kind: m.kind,
+        origin: m.origin ?? "user",
+        entry_ids: m.entry_ids ?? [],
+        reviewed_at: m.reviewed_at ?? null,
+        encrypted_dek: dek,
+        encrypted_content: ct,
+        version: m.version,
+        ...patch,
+      },
+      scope,
+    );
   }
 
   async function onCreateAction() {
     if (!kek || !goalForAction || !proposal.trim()) return;
-    const blob = await encryptLifePayload(kek, { proposal: proposal.trim(), grounds: "", chosen_try: proposal.trim() });
-    const review = new Date();
-    review.setDate(review.getDate() + 7);
-    await persist("action", {
-      id: newId(),
-      goal_id: goalForAction,
-      state: "accepted",
-      review_at: review.toISOString(),
-      ...blob,
+    const blob = await encryptLifePayload(kek, {
+      proposal: proposal.trim(),
+      grounds: "",
+      chosen_try: proposal.trim(),
     });
+    const review = reviewAt ? new Date(`${reviewAt}T12:00:00`).toISOString() : plusDays(7);
+    await persist(
+      "action",
+      {
+        id: newId(),
+        goal_id: goalForAction,
+        state: "accepted",
+        result_metric: resultMetric.trim() || null,
+        review_at: review,
+        encrypted_dek: blob.encrypted_dek,
+        encrypted_content: blob.encrypted_content,
+      },
+      blob.scope,
+    );
     setProposal("");
+    setResultMetric("");
     setMsg(t.lifeActionSaved);
   }
 
-  async function onFeedback(actionId: string, outcome: string) {
-    if (!kek) return;
-    const blob = await encryptLifePayload(kek, {
-      difficulty: "",
-      usefulness: "",
-      what_changed: "",
-      side_effects: "",
-      continue_notes: "",
+  async function writeAction(a: LifeActionRead, patch: Record<string, unknown>) {
+    await persist("action", {
+      id: a.id,
+      goal_id: a.goal_id,
+      state: a.state,
+      result_metric: a.result_metric ?? null,
+      period_start: a.period_start ?? null,
+      period_end: a.period_end ?? null,
+      review_at: a.review_at ?? null,
+      encrypted_dek: a.encrypted_dek,
+      encrypted_content: a.encrypted_content,
+      version: a.version,
+      ...patch,
     });
-    await persist("feedback", { id: newId(), action_id: actionId, outcome_kind: outcome, ...blob });
+  }
+
+  async function onFeedback(
+    action: LifeActionRead,
+    next: "continue" | "complete" | "stop",
+    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string },
+  ) {
+    if (!kek) return;
+    if (!fields.what_changed.trim() && !fields.difficulty.trim() && !fields.side_effects.trim()) {
+      setMsg(t.reviewFields);
+      return;
+    }
+    const outcome =
+      next === "stop" ? "not_suitable" : next === "complete" ? "tried_helped" : fields.tried ? "tried_helped" : "not_tried";
+    const blob = await encryptLifePayload(kek, {
+      tried: fields.tried,
+      what_changed: fields.what_changed.trim(),
+      difficulty: fields.difficulty.trim(),
+      side_effects: fields.side_effects.trim(),
+      continue_notes: next,
+    });
+    await persist(
+      "feedback",
+      { id: newId(), action_id: action.id, outcome_kind: outcome, encrypted_dek: blob.encrypted_dek, encrypted_content: blob.encrypted_content },
+      blob.scope,
+    );
+    if (next === "complete") await writeAction(action, { state: "completed", review_at: null });
+    else if (next === "stop") await writeAction(action, { state: "stopped", review_at: null });
+    else await writeAction(action, { state: "active", review_at: plusDays(7) });
     setMsg(t.lifeFeedbackSaved);
+  }
+
+  function goalTitle(g: LifeGoalRead): string {
+    const title = goalPlain[g.id]?.title;
+    return typeof title === "string" && title.trim() ? title : g.id.slice(0, 8);
   }
 
   return (
@@ -150,7 +266,9 @@ export default function LifePage() {
         <select className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-sm" value={habitId} onChange={(e) => setHabitId(e.target.value)}>
           <option value="">{t.lifeOptionalHabit}</option>
           {habits.map((h) => (
-            <option key={h.id} value={h.id}>{h.name}</option>
+            <option key={h.id} value={h.id}>
+              {h.name}
+            </option>
           ))}
         </select>
         <button type="button" className="min-h-[44px] px-3 rounded bg-indigo-600 text-sm" onClick={() => void onCreateGoal()}>
@@ -160,15 +278,20 @@ export default function LifePage() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium">{t.lifeGoals}</h2>
-        {(bundle?.goals ?? []).map((g) => (
-          <CipherCard key={g.id} kek={kek} dek={g.encrypted_dek} ct={g.encrypted_content} fallback={g.id}>
-            {(plain) => (
-              <div className="text-sm">
-                <div className="font-medium">{String(plain.title ?? t.lifeGoalTitle)}</div>
-                <div className="text-zinc-500">{g.state}</div>
-              </div>
-            )}
-          </CipherCard>
+        {bundle.goals.map((g) => (
+          <div key={g.id} className="rounded border border-zinc-800 p-3 space-y-1">
+            <div className="flex justify-between gap-2">
+              <CipherCard kek={kek} dek={g.encrypted_dek} ct={g.encrypted_content} fallback={g.id}>
+                {(plain) => (
+                  <div className="text-sm">
+                    <div className="font-medium">{String(plain.title ?? t.lifeGoalTitle)}</div>
+                    <div className="text-zinc-500">{g.state}</div>
+                  </div>
+                )}
+              </CipherCard>
+              {badge(g.id)}
+            </div>
+          </div>
         ))}
       </section>
 
@@ -178,17 +301,19 @@ export default function LifePage() {
         <button type="button" className="min-h-[44px] px-3 rounded bg-zinc-800 text-sm" onClick={() => void onCreateMemory()}>
           {t.lifeSaveMemory}
         </button>
-        {(bundle?.memory ?? []).map((m) => (
-          <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
-            <CipherCard kek={kek} dek={m.encrypted_dek} ct={m.encrypted_content} fallback={m.kind}>
-              {(plain) => <span>{String(plain.statement ?? m.kind)} · {m.state}</span>}
-            </CipherCard>
-            {m.state === "proposed" && (
-              <button type="button" className="text-xs px-2 py-1 rounded bg-indigo-600" onClick={() => void onAcceptMemory(m.id, m.version ?? 1, m.kind, m.origin ?? "user", m.entry_ids ?? [], m.encrypted_dek, m.encrypted_content)}>
-                {t.lifeAccept}
-              </button>
-            )}
-          </div>
+        {bundle.memory.map((m) => (
+          <MemoryRow
+            key={m.id}
+            item={m}
+            kek={kek}
+            badge={badge(m.id)}
+            t={t}
+            onAccept={() => void writeMemory(m, { state: "accepted", reviewed_at: new Date().toISOString() })}
+            onDispute={() => void writeMemory(m, { state: "disputed", reviewed_at: new Date().toISOString() })}
+            onStale={() => void writeMemory(m, { state: "stale", reviewed_at: new Date().toISOString() })}
+            onDelete={() => void writeMemory(m, { deleted: true })}
+            onEdit={(text) => void writeMemory(m, { state: m.state, reviewed_at: new Date().toISOString() }, { statement: text, sensitive_grounds: "" })}
+          />
         ))}
       </section>
 
@@ -196,53 +321,200 @@ export default function LifePage() {
         <h2 className="text-sm font-medium">{t.lifeNewAction}</h2>
         <select className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-sm" value={goalForAction} onChange={(e) => setGoalForAction(e.target.value)}>
           <option value="">{t.lifePickGoal}</option>
-          {(bundle?.goals ?? []).map((g) => (
-            <option key={g.id} value={g.id}>{g.id.slice(0, 8)}</option>
+          {bundle.goals.map((g) => (
+            <option key={g.id} value={g.id}>
+              {goalTitle(g)}
+            </option>
           ))}
         </select>
         <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-sm" placeholder={t.lifeActionTry} value={proposal} onChange={(e) => setProposal(e.target.value)} />
+        <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-sm" placeholder={t.lifeResultMetric} value={resultMetric} onChange={(e) => setResultMetric(e.target.value)} />
+        <label className="block text-xs text-zinc-400">
+          {t.lifeReviewAt}
+          <input
+            type="date"
+            className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-sm text-zinc-100"
+            value={reviewAt}
+            onChange={(e) => setReviewAt(e.target.value)}
+          />
+        </label>
         <button type="button" className="min-h-[44px] px-3 rounded bg-zinc-800 text-sm" onClick={() => void onCreateAction()}>
           {t.lifeSaveAction}
         </button>
-        {(bundle?.actions ?? []).map((a) => (
-          <div key={a.id} className="space-y-1 text-sm">
-            <CipherCard kek={kek} dek={a.encrypted_dek} ct={a.encrypted_content} fallback={a.state}>
-              {(plain) => <span>{String(plain.chosen_try ?? plain.proposal ?? a.state)}</span>}
-            </CipherCard>
-            <div className="flex flex-wrap gap-1">
-              {["not_tried", "not_suitable", "tried_no_effect", "tried_helped"].map((outcome) => (
-                <button key={outcome} type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => void onFeedback(a.id, outcome)}>
-                  {outcome}
-                </button>
-              ))}
-            </div>
-          </div>
+        {bundle.actions.map((a) => (
+          <ActionRow
+            key={a.id}
+            action={a}
+            goalName={goalTitle(bundle.goals.find((g) => g.id === a.goal_id) ?? { id: a.goal_id } as LifeGoalRead)}
+            kek={kek}
+            badge={badge(a.id)}
+            t={t}
+            outcomeLabel={outcomeLabel}
+            feedback={bundle.feedback.filter((f) => f.action_id === a.id)}
+            onReviewAt={(iso) => void writeAction(a, { review_at: iso })}
+            onFeedback={(next, fields) => void onFeedback(a, next, fields)}
+          />
         ))}
       </section>
     </div>
   );
 }
 
-function CipherCard({
+function MemoryRow({
+  item,
   kek,
-  dek,
-  ct,
-  fallback,
-  children,
+  badge,
+  t,
+  onAccept,
+  onDispute,
+  onStale,
+  onDelete,
+  onEdit,
 }: {
+  item: LifeMemoryRead;
   kek: CryptoKey | null;
-  dek: string;
-  ct: string;
-  fallback: string;
-  children: (plain: Record<string, unknown>) => ReactNode;
+  badge: ReactNode;
+  t: TStrings;
+  onAccept: () => void;
+  onDispute: () => void;
+  onStale: () => void;
+  onDelete: () => void;
+  onEdit: (text: string) => void;
 }) {
-  const [plain, setPlain] = useState<Record<string, unknown> | null>(null);
-  if (!kek) return <div className="text-xs text-zinc-500">{fallback}</div>;
-  if (!plain) {
-    void decryptEntry(ct, dek, kek)
-      .then((raw) => setPlain(JSON.parse(raw) as Record<string, unknown>))
-      .catch(() => setPlain({}));
-    return <div className="text-xs text-zinc-500">…</div>;
-  }
-  return <>{children(plain)}</>;
+  const [editing, setEditing] = useState("");
+  return (
+    <div className="space-y-1 text-sm border-t border-zinc-800 pt-2">
+      <div className="flex items-center justify-between gap-2">
+        <CipherCard kek={kek} dek={item.encrypted_dek} ct={item.encrypted_content} fallback={item.kind}>
+          {(plain) => <span>{String(plain.statement ?? item.kind)} · {item.state}</span>}
+        </CipherCard>
+        {badge}
+      </div>
+      {(item.entry_ids ?? []).length > 0 && (
+        <p className="text-[11px] text-zinc-500">
+          {t.lifeSources}: {(item.entry_ids ?? []).join(", ")}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-1">
+        {item.state === "proposed" && (
+          <button type="button" className="text-xs px-2 py-1 rounded bg-indigo-600" onClick={onAccept}>
+            {t.lifeAccept}
+          </button>
+        )}
+        <button type="button" className="text-xs px-2 py-1 rounded bg-zinc-800" onClick={onDispute}>
+          {t.lifeDispute}
+        </button>
+        <button type="button" className="text-xs px-2 py-1 rounded bg-zinc-800" onClick={onStale}>
+          {t.lifeStale}
+        </button>
+        <button type="button" className="text-xs px-2 py-1 rounded bg-zinc-800" onClick={onDelete}>
+          {t.lifeDelete}
+        </button>
+      </div>
+      <div className="flex gap-1">
+        <input
+          className="flex-1 rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs"
+          placeholder={t.edit}
+          value={editing}
+          onChange={(e) => setEditing(e.target.value)}
+        />
+        <button
+          type="button"
+          className="text-xs px-2 py-1 rounded bg-zinc-800"
+          onClick={() => {
+            if (editing.trim()) onEdit(editing.trim());
+            setEditing("");
+          }}
+        >
+          {t.save}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ActionRow({
+  action,
+  goalName,
+  kek,
+  badge,
+  t,
+  outcomeLabel,
+  feedback,
+  onReviewAt,
+  onFeedback,
+}: {
+  action: LifeActionRead;
+  goalName: string;
+  kek: CryptoKey | null;
+  badge: ReactNode;
+  t: TStrings;
+  outcomeLabel: (kind: string, t: TStrings) => string;
+  feedback: { outcome_kind: string }[];
+  onReviewAt: (iso: string) => void;
+  onFeedback: (
+    next: "continue" | "complete" | "stop",
+    fields: { tried: boolean; what_changed: string; difficulty: string; side_effects: string },
+  ) => void;
+}) {
+  const [tried, setTried] = useState(true);
+  const [what, setWhat] = useState("");
+  const [difficulty, setDifficulty] = useState("");
+  const [side, setSide] = useState("");
+  const fields = { tried, what_changed: what, difficulty, side_effects: side };
+  return (
+    <div className="space-y-1 text-sm border-t border-zinc-800 pt-2">
+      <div className="flex justify-between gap-2">
+        <div>
+          <div className="text-xs text-zinc-400">{goalName}</div>
+          <CipherCard kek={kek} dek={action.encrypted_dek} ct={action.encrypted_content} fallback={action.state}>
+            {(plain) => <span>{String(plain.chosen_try ?? plain.proposal ?? action.state)}</span>}
+          </CipherCard>
+          {action.result_metric && <div className="text-[11px] text-zinc-500">{action.result_metric}</div>}
+          {action.state !== "completed" && action.state !== "stopped" && (
+            <label className="block text-[11px] text-zinc-400">
+              {t.lifeReviewAt}
+              <input
+                type="date"
+                className="mt-1 w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-100"
+                value={action.review_at ? action.review_at.slice(0, 10) : ""}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  onReviewAt(new Date(`${e.target.value}T12:00:00`).toISOString());
+                }}
+              />
+            </label>
+          )}
+        </div>
+        {badge}
+      </div>
+      {feedback.map((f, i) => (
+        <div key={i} className="text-[11px] text-zinc-500">
+          {outcomeLabel(f.outcome_kind, t)}
+        </div>
+      ))}
+      {action.state !== "completed" && action.state !== "stopped" && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={tried} onChange={(e) => setTried(e.target.checked)} />
+            {t.lifeTried}
+          </label>
+          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeWhatChanged} value={what} onChange={(e) => setWhat(e.target.value)} />
+          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeDifficulty} value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />
+          <input className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs" placeholder={t.lifeSideEffects} value={side} onChange={(e) => setSide(e.target.value)} />
+          <div className="flex flex-wrap gap-1">
+            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onFeedback("continue", fields)}>
+              {t.lifeContinue}
+            </button>
+            <button type="button" className="text-[11px] px-2 py-1 rounded bg-indigo-600" onClick={() => onFeedback("complete", fields)}>
+              {t.lifeComplete}
+            </button>
+            <button type="button" className="text-[11px] px-2 py-1 rounded bg-zinc-800" onClick={() => onFeedback("stop", fields)}>
+              {t.lifeStop}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

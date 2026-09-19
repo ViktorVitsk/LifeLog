@@ -1,8 +1,8 @@
-import { db } from "../db/offlineQueue";
-import { decryptEntry, encryptEntry } from "../lib/crypto";
-import { getCurrentUserId, requireCurrentUserId } from "../lib/accountScope";
-import { localDayKey } from "../lib/dates";
-import type { ThreadMessage } from "./types";
+import { db } from "../db/offlineQueue.ts";
+import { decryptEntry, encryptEntry } from "../lib/crypto.ts";
+import { getCurrentUserId, requireCurrentUserId } from "../lib/accountScope.ts";
+import { localDayKey } from "../lib/dates.ts";
+import type { ThreadMessage } from "./types.ts";
 
 export async function saveThreadMessage(msg: ThreadMessage, kek: CryptoKey): Promise<void> {
   const owner = requireCurrentUserId();

@@ -345,6 +345,6 @@ export const CLOUD_TOOLS: ToolDef[] = [
 /** Kept for runtime validation if a model still names a write tool. Not offered to the provider. */
 export const BLOCKED_WRITE_TOOL_DEFS: ToolDef[] = [createSkill, createHabit, updateHabit, commitEntries];
 
-export function toolsForProvider(provider: "openrouter" | "ollama"): ToolDef[] {
+export function toolsForProvider(provider: "openrouter" | "ollama" | "synthetic"): ToolDef[] {
   return provider === "ollama" ? LOCAL_TOOLS : CLOUD_TOOLS;
 }

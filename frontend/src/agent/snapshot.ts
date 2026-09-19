@@ -1,8 +1,8 @@
-import type { Habit, Skill } from "../lib/api";
-import type { MergedEntry } from "../hooks/useEntries";
-import type { AppLocale } from "../i18n/locale";
-import { STRINGS } from "../i18n/strings";
-import { getAccountTimeZone, isSameLocalDay, localDayKey, startOfLocalDay } from "../lib/dates";
+import type { Habit, Skill } from "../lib/api.ts";
+import type { MergedEntry } from "../hooks/useEntries.ts";
+import type { AppLocale } from "../i18n/locale.ts";
+import { STRINGS } from "../i18n/strings.ts";
+import { getAccountTimeZone, isSameLocalDay, localDayKey, startOfLocalDay } from "../lib/dates.ts";
 
 export function buildTodaySnapshot(args: {
   entries: MergedEntry[];

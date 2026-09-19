@@ -57,7 +57,7 @@ export interface ContextBudget {
   envelope: ContextEnvelope;
   decryptedEntryIds: Set<string>;
   audit: ToolContextAudit[];
-  provider: "openrouter" | "ollama";
+  provider: "openrouter" | "ollama" | "synthetic";
 }
 
 const MS_DAY = 24 * 3600_000;

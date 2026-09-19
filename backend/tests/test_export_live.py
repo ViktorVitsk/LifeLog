@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,7 @@ BASE = os.environ.get("LIFELOG_API", "http://127.0.0.1:8001")
 def test_live_export_walks_pages():
     username = f"qa_b5_{uuid.uuid4().hex[:8]}"
     password = "qa_b5_pass"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with httpx.Client(timeout=10) as client:
         assert (
             client.post(

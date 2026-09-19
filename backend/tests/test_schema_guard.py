@@ -1,4 +1,4 @@
-from app.services.schema_guard import classify_value, precheck_rows, RANGES
+from app.services.schema_guard import RANGES, classify_value, precheck_rows
 
 
 def test_scores_are_one_to_ten():

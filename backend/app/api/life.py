@@ -25,10 +25,8 @@ from app.models.life import (
 )
 from app.schemas.life import (
     ActionRead,
-    ActionSyncItem,
     ActionSyncRequest,
     FeedbackRead,
-    FeedbackSyncItem,
     FeedbackSyncRequest,
     GoalRead,
     GoalSyncItem,
@@ -37,7 +35,6 @@ from app.schemas.life import (
     LifeSyncResponse,
     LifeSyncResult,
     MemoryRead,
-    MemorySyncItem,
     MemorySyncRequest,
 )
 from app.services.life_sync import decide_life_item, id_tuple, iso_key

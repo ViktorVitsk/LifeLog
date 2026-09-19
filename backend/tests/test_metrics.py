@@ -1,6 +1,6 @@
 from app.services.metrics import (
-    MIN_JOINT_DAYS,
     METRICS,
+    MIN_JOINT_DAYS,
     coverage,
     get_metric,
     normalize_sample,

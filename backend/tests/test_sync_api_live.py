@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -21,7 +21,7 @@ BASE = os.environ.get("LIFELOG_API", "http://127.0.0.1:8001")
 def _entry(entry_id: str, **overrides: object) -> dict:
     payload = {
         "id": entry_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "entry_type": "THOUGHT",
         "tags": [],
         "encrypted_dek": "dek-test",

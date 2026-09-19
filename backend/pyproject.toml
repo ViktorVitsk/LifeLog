@@ -31,7 +31,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP"]
-ignore = ["E501"]
+# FastAPI intentionally calls Depends() in endpoint defaults.
+ignore = ["B008", "E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

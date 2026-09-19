@@ -1,14 +1,13 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 from app.services.sync_contract import decide_sync_item, entry_fingerprint, validate_incoming
-
 
 USER = uuid4()
 SKILL = uuid4()
 HABIT = uuid4()
 OTHER = uuid4()
-NOW = datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 19, 10, 0, tzinfo=UTC)
 
 
 def _incoming(**overrides):
@@ -263,6 +262,6 @@ def test_upsert_of_soft_deleted_row_is_rejected():
 
 
 def test_fingerprint_treats_equivalent_timezones_as_same():
-    utc = datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc)
+    utc = datetime(2026, 9, 19, 10, 0, tzinfo=UTC)
     offset = datetime(2026, 9, 19, 13, 0, tzinfo=timezone(timedelta(hours=3)))
     assert entry_fingerprint(_incoming(timestamp=utc)) == entry_fingerprint(_incoming(timestamp=offset))

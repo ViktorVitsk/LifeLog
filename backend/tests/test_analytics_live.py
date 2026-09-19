@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -39,7 +39,7 @@ def _sync(client: httpx.Client, headers: dict[str, str], entries: list[dict]) ->
 
 
 def test_live_aggregation_rules():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     day = now.replace(hour=12, minute=0, second=0, microsecond=0)
     earlier = day - timedelta(days=1)
     with httpx.Client(timeout=10) as client:

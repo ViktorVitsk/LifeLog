@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import StrEnum
 from collections.abc import Mapping
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -61,7 +61,7 @@ def _entry_type_value(value: Any) -> str:
 def _timestamp_key(value: Any) -> int | None:
     if not isinstance(value, datetime) or value.tzinfo is None:
         return None
-    return int(value.astimezone(timezone.utc).timestamp() * 1_000_000)
+    return int(value.astimezone(UTC).timestamp() * 1_000_000)
 
 
 def _tags_key(value: Any) -> tuple[str, ...]:

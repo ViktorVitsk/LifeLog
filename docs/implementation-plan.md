@@ -232,11 +232,11 @@ Iteration F волны 1–3 в коде и закоммичены. Незакр
 | Исправление истории патчит действие | да | да | да | да (`tried_helped`, действие `completed` v2) | — |
 | Глобальная подмена `activeDb` / DEV-globals | да | да | skip без IDB | — | живая вкладка + `Dexie.delete` iso не гонялись в UI |
 | Запоздалый `applyToken` | да | да | да | частично (logout A → login B без чужих карточек) | задержанный refresh A после B не перехватывался в UI |
-| 1. Две вкладки, правка во время задержанного запроса | — | да (unit/TX) | да | частично: две разблокированные вкладки видят одно действие | задержанный dual-edit HTTP |
-| 2. Два независимых контекста, удаление | — | — | — | непроверено | один профиль Cursor browser |
-| 3. Synthetic-стрим + logout | — | — | unit сессии | непроверено | нет LLM-прогона в H |
-| 4. Экспорт + смена аккаунта | — | — | — | непроверено | пункт 9 не начинали |
-| 5. Decrypt затем строгая политика | — | — | unit агента (G) | непроверено | нет LLM-прогона в H |
+| 1. Две вкладки, правка во время задержанного запроса | да | да | да | да: tab1 HTTP `/api/life/actions/sync` удержан; tab2 записал `tried_helped`; после release действие `accepted` rev=4 v3, оба отзыва доставлены, tab1 op `superseded`, черновики на месте | — |
+| 2. Два независимых контекста, удаление | да | да (`applyEntryTombstones(store)`) | skip в Node | да: два `LifeLogDB` имени, очередь B пуста, tombstone, пустой persist не возвращает запись. `Target.createBrowserContext` запрещён | отдельный системный Chrome/Playwright не ставили |
+| 3. Synthetic-стрим + logout | да | да | да | да: задержка после `PART_A_`; logout; late `PART_B_SECRET` и `LATE_CARD` не у A и не у `qa_h_b_0919`; нового раунда нет | — |
+| 4. Экспорт + смена аккаунта | да | да | — | да: пауза на GET `/api/entries`; logout A → login B; продолжение; файл не скачан; обработчик UI записал `exportCancelled`. После unmount Settings строка не остаётся на экране B | полный `buildFullExport()` на изолированных данных не гоняли |
+| 5. Decrypt затем строгая политика | да | да | да | да: Settings `decrypt_n` → ответ `heard H1_WHAT_qx91m` из исходящего payload; Settings `today` → следующий payload `policy=today`, маркера нет | — |
 | 6. Обрыв feedback/action, reload без второго отзыва | да | да | да | да: 1 feedback id, сервер 1 | первый POST оборван, повтор в той же сессии доставил |
 | 7. Обзор, поздний feedback, исправление, ссылки | да | да | да (числа) | да на сегодняшних данных `qa_h_0919` | готовый 14-дневный набор в UI не засевали |
 
@@ -258,4 +258,4 @@ Iteration F волны 1–3 в коде и закоммичены. Незакр
 | любое | запись с меньшим `status_seq` | без изменения |
 | `done` / `superseded` | refresh / повтор helper | без возврата в `local` |
 
-Отсутствующие `*_local_rev` не считаются совпадением. Восстановление — только если ciphertext операции совпал с текущей строкой. Коммиты H: `4ca901b`, `e056b40`, `2f476eb`, `33744ca`. `frontend/tsconfig.tsbuildinfo` не входил. Production `dist` без `__queueIdb` / `__lastExport`. Frontend: 112 тестов, 111 pass, 1 skip (нет IndexedDB в Node). Пункт 9 не начинали.
+Отсутствующие `*_local_rev` не считаются совпадением. Восстановление — только если ciphertext операции совпал с текущей строкой. Dexie v6→v7 на настоящей IDB: `intent_key` снят, owner/id/ciphertext сохранены, незавершённая операция дошла до `done`, повторное открытие стабильно. `frontend/tsconfig.tsbuildinfo` не входил. Production `dist` без `__queueIdb` / `__lastExport` / `__setSyntheticChatHandler`. Frontend: 138 тестов, 136 pass, 2 skip (нет IndexedDB в Node). Пункт 9 и изолированный полный `buildFullExport()` не начинали.

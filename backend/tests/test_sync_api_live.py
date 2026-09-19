@@ -77,6 +77,28 @@ def test_live_sync_contract_mixed_batch():
         assert created_id in [str(x) for x in first.json()["saved"]]
         assert foreign_id not in [str(x) for x in first.json()["saved"]]
 
+        occupied_id = str(uuid.uuid4())
+        occupied = client.post(
+            f"{BASE}/api/entries/sync",
+            headers=headers_a,
+            json={"entries": [_entry(occupied_id)]},
+        )
+        assert occupied.status_code == 200
+        assert occupied.json()["results"][0]["status"] == "created"
+
+        foreign_same_id = client.post(
+            f"{BASE}/api/entries/sync",
+            headers=headers_b,
+            json={"entries": [_entry(occupied_id)]},
+        )
+        assert foreign_same_id.status_code == 200
+        assert foreign_same_id.json()["results"][0] == {
+            "id": occupied_id,
+            "status": "rejected",
+            "reason": "id_unavailable",
+            "version": None,
+        }
+
         retry = client.post(
             f"{BASE}/api/entries/sync",
             headers=headers_b,

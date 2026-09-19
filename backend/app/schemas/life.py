@@ -159,4 +159,7 @@ class LifeBundle(BaseModel):
     actions: list[ActionRead]
     feedback: list[FeedbackRead]
     due_action_ids: list[UUID] = Field(default_factory=list)
+    offset: int = 0
+    limit: int | None = None
+    next_offset: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)

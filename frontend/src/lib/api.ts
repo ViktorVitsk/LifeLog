@@ -1,3 +1,5 @@
+import { collectLifePages } from "./lifePaging";
+
 const rawBase = import.meta.env.VITE_API_URL;
 /** Empty = same origin (Vite proxies `/api` → LifeLog backend). */
 const BASE_URL = (typeof rawBase === "string" ? rawBase.trim() : "").replace(/\/$/, "");
@@ -506,7 +508,12 @@ export const api = {
   },
 
   async getLife(token: string): Promise<LifeBundle> {
-    return request("/api/life", { token });
+    return collectLifePages(
+      (offset, limit) => request<LifeBundle>(
+        `/api/life?limit=${limit}&offset=${offset}`,
+        { token },
+      ),
+    );
   },
 
   async syncLifeGoals(token: string, items: LifeGoalSync[]): Promise<LifeSyncResponse> {
@@ -607,4 +614,7 @@ export interface LifeBundle {
   actions: LifeActionRead[];
   feedback: LifeFeedbackRead[];
   due_action_ids: string[];
+  offset?: number;
+  limit?: number | null;
+  next_offset?: number | null;
 }

@@ -95,38 +95,82 @@ async def _memory_extra(db: AsyncSession, memory_id: UUID, kind, origin, reviewe
     return (kind, origin, iso_key(reviewed_at), id_tuple(entry_ids))
 
 
+async def _page_rows(
+    db: AsyncSession,
+    model: type,
+    user_id: UUID,
+    limit: int | None,
+    offset: int,
+) -> tuple[list, bool]:
+    stmt = (
+        select(model)
+        .where(model.user_id == user_id, model.deleted_at.is_(None))
+        .order_by(model.created_at.asc(), model.id.asc())
+        .offset(offset)
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit + 1)
+    rows = list((await db.execute(stmt)).scalars().all())
+    if limit is None:
+        return rows, False
+    return rows[:limit], len(rows) > limit
+
+
 @router.get("", response_model=LifeBundle)
 async def list_life(
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LifeBundle:
     uid = current_user.id
-    goals = list(
-        (await db.execute(select(Goal).where(Goal.user_id == uid, Goal.deleted_at.is_(None)))).scalars().all()
-    )
-    memory = list(
-        (
-            await db.execute(select(MemoryItem).where(MemoryItem.user_id == uid, MemoryItem.deleted_at.is_(None)))
-        ).scalars().all()
-    )
-    actions = list(
+    goals, more_goals = await _page_rows(db, Goal, uid, limit, offset)
+    memory, more_memory = await _page_rows(db, MemoryItem, uid, limit, offset)
+    actions, more_actions = await _page_rows(db, PlannedAction, uid, limit, offset)
+    feedback, more_feedback = await _page_rows(db, ActionFeedback, uid, limit, offset)
+
+    goal_ids = [row.id for row in goals]
+    memory_ids = [row.id for row in memory]
+    habit_links = list(
         (
             await db.execute(
-                select(PlannedAction).where(PlannedAction.user_id == uid, PlannedAction.deleted_at.is_(None))
+                select(GoalHabitLink).where(
+                    GoalHabitLink.user_id == uid,
+                    GoalHabitLink.goal_id.in_(goal_ids),
+                )
             )
         ).scalars().all()
     )
-    feedback = list(
+    skill_links = list(
         (
             await db.execute(
-                select(ActionFeedback).where(ActionFeedback.user_id == uid, ActionFeedback.deleted_at.is_(None))
+                select(GoalSkillLink).where(
+                    GoalSkillLink.user_id == uid,
+                    GoalSkillLink.goal_id.in_(goal_ids),
+                )
             )
         ).scalars().all()
     )
-    habit_links = list((await db.execute(select(GoalHabitLink).where(GoalHabitLink.user_id == uid))).scalars().all())
-    skill_links = list((await db.execute(select(GoalSkillLink).where(GoalSkillLink.user_id == uid))).scalars().all())
-    entry_links = list((await db.execute(select(GoalEntryLink).where(GoalEntryLink.user_id == uid))).scalars().all())
-    mem_links = list((await db.execute(select(MemoryEntryLink).where(MemoryEntryLink.user_id == uid))).scalars().all())
+    entry_links = list(
+        (
+            await db.execute(
+                select(GoalEntryLink).where(
+                    GoalEntryLink.user_id == uid,
+                    GoalEntryLink.goal_id.in_(goal_ids),
+                )
+            )
+        ).scalars().all()
+    )
+    mem_links = list(
+        (
+            await db.execute(
+                select(MemoryEntryLink).where(
+                    MemoryEntryLink.user_id == uid,
+                    MemoryEntryLink.memory_id.in_(memory_ids),
+                )
+            )
+        ).scalars().all()
+    )
 
     habits_by_goal: dict[UUID, list[UUID]] = {}
     for link in habit_links:
@@ -185,6 +229,14 @@ async def list_life(
         actions=[ActionRead.model_validate(row) for row in actions],
         feedback=[FeedbackRead.model_validate(row) for row in feedback],
         due_action_ids=due,
+        offset=offset,
+        limit=limit,
+        next_offset=(
+            offset + limit
+            if limit is not None
+            and (more_goals or more_memory or more_actions or more_feedback)
+            else None
+        ),
     )
 
 

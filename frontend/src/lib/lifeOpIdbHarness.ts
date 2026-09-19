@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import { LifeLogDB, type LifeOp, type PendingLife } from "../db/offlineQueue.ts";
+import { getEntry, getOp, listEntries, listLife, listOps } from "../db/outbox.ts";
 import { deriveKEK, encryptEntry } from "./crypto.ts";
 import { applyLifeResult, claimLifeForSend } from "./lifeQueue.ts";
 import { refreshLifeOpStatus } from "./lifeOp.ts";
@@ -132,8 +133,8 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
 
   const current = new LifeLogDB(name);
   try {
-    const first = await current.life_ops.toArray();
-    const queue = await current.life_queue.toArray();
+    const first = await listOps(current);
+    const queue = await listLife(current);
     notes.push(`queue ids=${queue.map((row) => `${row.id}:${row.status}:${row.local_rev}`).join(",")}`);
     const open = first.find((row) => row.id === "op-open");
     const done = first.find((row) => row.id === "op-done");
@@ -151,7 +152,7 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
     notes.push(`after v7: open.sub=${open?.submission_id} done.status=${done?.status} noIntent=${noIntent}`);
 
     await refreshLifeOpStatus(owner, current);
-    const afterRecover = await current.life_ops.get("op-open");
+    const afterRecover = await getOp(current, "op-open");
     notes.push(`recovered revs fb=${afterRecover?.feedback_local_rev} act=${afterRecover?.action_local_rev}`);
 
     const claimed = await claimLifeForSend(owner, current);
@@ -160,13 +161,13 @@ export async function runDexieV6Migration(): Promise<{ ok: boolean; notes: strin
     if (fbSnap) await applyLifeResult(fbSnap, { status: "created", version: 1 }, current);
     if (actSnap) await applyLifeResult(actSnap, { status: "updated", version: 5 }, current);
     await refreshLifeOpStatus(owner, current);
-    const delivered = await current.life_ops.get("op-open");
+    const delivered = await getOp(current, "op-open");
     notes.push(`delivered status=${delivered?.status} payloadNull=${delivered?.feedback_payload == null}`);
 
     current.close();
     const again = new LifeLogDB(name);
     try {
-      const second = await again.life_ops.toArray();
+      const second = await listOps(again);
       const open2 = second.find((row) => row.id === "op-open");
       const done2 = second.find((row) => row.id === "op-done");
       const stable =
@@ -215,16 +216,16 @@ export async function runTwoIndependentStoreDelete(): Promise<{ ok: boolean; not
     const { persistServerEntries, applyEntryTombstones, enqueueEntry } = await import("../db/offlineQueue.ts");
     await persistServerEntries([row], owner, a);
     await persistServerEntries([row], owner, b);
-    notes.push(`seeded A=${Boolean(await a.entries.get("e-del"))} B=${Boolean(await b.entries.get("e-del"))}`);
+    notes.push(`seeded A=${Boolean(await getEntry(a, "e-del"))} B=${Boolean(await getEntry(b, "e-del"))}`);
     await enqueueEntry({ ...row, deleted: true }, { owner, sessionId: 1 }, a);
-    const afterDelete = await a.entries.get("e-del");
+    const afterDelete = await getEntry(a, "e-del");
     notes.push(`A after local delete status=${afterDelete?.status} rev=${afterDelete?.local_rev}`);
-    const pendingB = await b.entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
+    const pendingB = (await listEntries(b)).filter((item) => ["pending", "error", "pending_delete"].includes(item.status));
     notes.push(`B queue empty=${pendingB.filter((item) => item.owner_user_id === owner).length === 0}`);
     await applyEntryTombstones([{ id: "e-del", version: 4 }], owner, b);
-    const gone = await b.entries.get("e-del");
+    const gone = await getEntry(b, "e-del");
     await persistServerEntries([], owner, b);
-    const stillGone = await b.entries.get("e-del");
+    const stillGone = await getEntry(b, "e-del");
     notes.push(`B after tombstone=${gone?.id ?? "missing"} after empty persist=${stillGone?.id ?? "missing"}`);
     const ok = afterDelete?.status === "pending_delete" && !gone && !stillGone;
     return { ok: Boolean(ok), notes };

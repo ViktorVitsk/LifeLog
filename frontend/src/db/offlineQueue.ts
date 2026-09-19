@@ -1,4 +1,4 @@
-import Dexie, { type EntityTable } from "dexie";
+import Dexie, { type EntityTable, type Table } from "dexie";
 import {
   assertEncryptAllowed,
   getCurrentUserId,
@@ -7,6 +7,18 @@ import {
 } from "../lib/accountScope.ts";
 import type { EntryRead, EntrySyncPayload } from "../lib/api.ts";
 import { ackKindFromStatus, applyRevisionAck } from "../lib/queueAck.ts";
+import {
+  claimEntityRows,
+  copyLegacyToOutbox,
+  deleteEntry,
+  getEntry,
+  listEntries,
+  listOps,
+  OUTBOX_STORE,
+  putEntry,
+  putOp,
+  type OutboxRow,
+} from "./outbox.ts";
 
 export type QueueStatus = "pending" | "synced" | "error" | "rejected" | "conflict" | "pending_delete";
 
@@ -114,6 +126,7 @@ export class LifeLogDB extends Dexie {
   kek_verifiers!: EntityTable<StoredKekVerifier, "owner_user_id">;
   life_queue!: EntityTable<PendingLife, "id">;
   life_ops!: EntityTable<LifeOp, "id">;
+  outbox!: Table<OutboxRow, string>;
 
   constructor(name = "lifelog") {
     super(name);
@@ -164,6 +177,14 @@ export class LifeLogDB extends Dexie {
             }
           }),
       );
+    this.version(8)
+      .stores({
+        outbox: OUTBOX_STORE,
+      })
+      .upgrade((tx) => copyLegacyToOutbox(tx));
+    this.on("versionchange", () => {
+      this.close();
+    });
   }
 }
 
@@ -246,7 +267,7 @@ export async function ackLifeOpsForResult(
   store?: LifeLogDB,
 ): Promise<void> {
   const { db: target } = resolveQueueAccess(store);
-  const rows = await target.life_ops.toArray();
+  const rows = await listOps(target);
   for (const op of rows) {
     const next = applyOpEntityAck(op, entityId, localRev, result);
     if (
@@ -258,7 +279,7 @@ export async function ackLifeOpsForResult(
     ) {
       continue;
     }
-    await target.life_ops.put(next);
+    await putOp(target, next);
   }
 }
 
@@ -288,9 +309,9 @@ export function nextEntryEnqueue(existing: PendingEntry | undefined, payload: En
 export async function enqueueEntry(payload: EntrySyncPayload, scope?: SaveScope, store?: LifeLogDB): Promise<void> {
   const owner = resolveWriteOwner(scope);
   const { db: target } = resolveQueueAccess(store);
-  await target.transaction("rw", target.entries, async () => {
-    const existing = await target.entries.get(payload.id);
-    await target.entries.put(nextEntryEnqueue(existing, payload, owner));
+  await target.transaction("rw", target.outbox, async () => {
+    const existing = await getEntry(target, payload.id);
+    await putEntry(target, nextEntryEnqueue(existing, payload, owner));
   });
 }
 
@@ -305,7 +326,8 @@ function dummyPayload(id: string, deleted = false): EntrySyncPayload {
   return { id, timestamp: "", entry_type: "THOUGHT", encrypted_dek: "", encrypted_content: "", tags: [], deleted };
 }
 
-function toEntryPayload(row: PendingEntry): EntrySyncPayload {
+/** Intentionally omits `goal_id`. Characterization coverage lives in `toEntryPayload.test.ts`. */
+export function toEntryPayload(row: PendingEntry): EntrySyncPayload {
   return {
     id: row.id,
     timestamp: row.timestamp,
@@ -343,23 +365,22 @@ function toEntryPayload(row: PendingEntry): EntrySyncPayload {
 export async function claimPendingEntries(limit = 50, userId?: string, store?: LifeLogDB): Promise<EntrySendSnapshot[]> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return [];
-  const snapshots: EntrySendSnapshot[] = [];
   const { db: target } = resolveQueueAccess(store);
-  await target.transaction("rw", target.entries, async () => {
-    const rows = await target.entries
-      .where("status")
-      .anyOf(["pending", "error", "pending_delete"])
-      .sortBy("queued_at");
-    for (const row of rows) {
-      if (snapshots.length >= limit) break;
-      if (row.owner_user_id !== owner) continue;
-      const local_rev = row.local_rev ?? 1;
-      row.inflight_rev = local_rev;
-      await target.entries.put(row);
-      snapshots.push({ id: row.id, owner, local_rev, payload: toEntryPayload(row) });
-    }
+  const rows = await claimEntityRows(target, owner, ["entry"], limit);
+  return rows.map((row) => {
+    const entry = {
+      ...(row.payload as unknown as EntrySyncPayload),
+      id: row.entity_id,
+      status: row.status,
+      queued_at: row.queued_at,
+      attempts: row.attempts ?? 0,
+      owner_user_id: row.owner_user_id ?? undefined,
+      local_rev: row.local_rev,
+      inflight_rev: row.inflight_rev,
+      version: row.server_version ?? (typeof row.payload.version === "number" ? row.payload.version : undefined),
+    } satisfies PendingEntry;
+    return { id: row.entity_id, owner, local_rev: row.local_rev ?? 1, payload: toEntryPayload(entry) };
   });
-  return snapshots;
 }
 
 function applyToEntry(
@@ -406,13 +427,14 @@ export async function applyEntryResult(
     reason: result.reason,
   };
   const { db: target } = resolveQueueAccess(store);
-  await target.transaction("rw", target.entries, async () => {
-    const row = await target.entries.get(snapshot.id);
+  await target.transaction("rw", target.outbox, async () => {
+    const row = await getEntry(target, snapshot.id);
     if (!row) return;
     const out = applyToEntry(row, { owner: snapshot.owner, local_rev: snapshot.local_rev }, ack);
     if (out.ignored) return;
-    if (out.drop) await target.entries.delete(snapshot.id);
-    else await target.entries.put(out.row);
+    if (out.drop) await deleteEntry(target, snapshot.id);
+    else await putEntry(target, out.row);
+    await ackLifeOpsForResult(snapshot.id, snapshot.local_rev, result, target);
   });
 }
 
@@ -464,10 +486,7 @@ export async function markRejected(
 export async function getPendingForSync(limit = 50, userId?: string): Promise<PendingEntry[]> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return [];
-  const rows = await getLifeDb().entries
-    .where("status")
-    .anyOf(["pending", "error", "pending_delete"])
-    .sortBy("queued_at");
+  const rows = await listEntries(getLifeDb());
   return rows
     .filter((r) => r.owner_user_id === owner && ["pending", "error", "pending_delete"].includes(r.status))
     .sort((a, b) => a.queued_at - b.queued_at)
@@ -477,8 +496,8 @@ export async function getPendingForSync(limit = 50, userId?: string): Promise<Pe
 export async function countPending(userId?: string): Promise<number> {
   const owner = userId ?? getCurrentUserId();
   if (!owner) return 0;
-  const rows = await getLifeDb().entries.where("status").anyOf(["pending", "error", "pending_delete"]).toArray();
-  return rows.filter((r) => r.owner_user_id === owner).length;
+  const rows = await listEntries(getLifeDb());
+  return rows.filter((r) => r.owner_user_id === owner && ["pending", "error", "pending_delete"].includes(r.status)).length;
 }
 
 export async function markPendingDelete(ids: string[]): Promise<void> {
@@ -496,11 +515,11 @@ export async function markPendingDelete(ids: string[]): Promise<void> {
     };
   };
   const store = getLifeDb();
-  await store.transaction("rw", store.entries, async () => {
+  await store.transaction("rw", store.outbox, async () => {
     for (const id of ids) {
-      const row = await store.entries.get(id);
+      const row = await getEntry(store, id);
       if (!row || row.owner_user_id !== owner) continue;
-      await store.entries.put(bump(row));
+      await putEntry(store, bump(row));
     }
   });
 }
@@ -526,19 +545,20 @@ export async function markInflight(ids: string[]): Promise<Record<string, number
     sent[row.id] = rev;
   };
   const store = getLifeDb();
-  const rows = await store.entries.bulkGet(ids);
-  for (const row of rows) {
+  for (const id of ids) {
+    const row = await getEntry(store, id);
     if (!row) continue;
     apply(row);
-    await store.entries.put(row);
+    await putEntry(store, row);
   }
   return sent;
 }
 
 export async function getEntryStatuses(ids: string[]): Promise<Record<string, QueueStatus>> {
-  const rows = await getLifeDb().entries.bulkGet(ids);
   const out: Record<string, QueueStatus> = {};
-  for (const row of rows) {
+  const store = getLifeDb();
+  for (const id of ids) {
+    const row = await getEntry(store, id);
     if (row) out[row.id] = row.status;
   }
   return out;
@@ -546,19 +566,18 @@ export async function getEntryStatuses(ids: string[]): Promise<Record<string, Qu
 
 export async function getRecentEntries(sinceMs: number): Promise<PendingEntry[]> {
   const owner = getCurrentUserId();
-  const sinceIso = new Date(sinceMs).toISOString();
-  const rows = await getLifeDb().entries.where("timestamp").above(sinceIso).toArray();
   if (!owner) return [];
-  return rows.filter((r) => r.owner_user_id === owner);
+  const sinceIso = new Date(sinceMs).toISOString();
+  const rows = await listEntries(getLifeDb());
+  return rows.filter((r) => r.owner_user_id === owner && r.timestamp > sinceIso);
 }
 
 export async function pruneSynced(olderThanMs: number): Promise<number> {
   const cutoff = Date.now() - olderThanMs;
-  return getLifeDb().entries
-    .where("status")
-    .equals("synced")
-    .and((e) => e.queued_at < cutoff)
-    .delete();
+  const store = getLifeDb();
+  const stale = (await listEntries(store)).filter((row) => row.status === "synced" && row.queued_at < cutoff);
+  for (const row of stale) await deleteEntry(store, row.id);
+  return stale.length;
 }
 
 export async function deleteLocalEntries(ids: string[]): Promise<void> {
@@ -566,37 +585,40 @@ export async function deleteLocalEntries(ids: string[]): Promise<void> {
   const owner = getCurrentUserId();
   if (!owner) return;
   const store = getLifeDb();
-  const rows = await store.entries.bulkGet(ids);
-  const mine = rows.filter((r): r is PendingEntry => Boolean(r && r.owner_user_id === owner));
-  await store.entries.bulkDelete(mine.map((r) => r.id));
+  for (const id of ids) {
+    const row = await getEntry(store, id);
+    if (row && row.owner_user_id === owner) await deleteEntry(store, id);
+  }
 }
 
 export async function listOrphanEntries(): Promise<PendingEntry[]> {
-  const rows = await getLifeDb().entries.toArray();
+  const rows = await listEntries(getLifeDb());
   return rows.filter((r) => r.owner_user_id == null || r.owner_user_id === "");
 }
 
 export async function attachOrphansToUser(userId: string, ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   let n = 0;
-  await getLifeDb().entries
-    .where("id")
-    .anyOf(ids)
-    .modify((row) => {
-      if (row.owner_user_id == null || row.owner_user_id === "") {
-        row.owner_user_id = userId;
+  const store = getLifeDb();
+  await store.transaction("rw", store.outbox, async () => {
+    for (const id of ids) {
+      const row = await getEntry(store, id);
+      if (row && (row.owner_user_id == null || row.owner_user_id === "")) {
+        await putEntry(store, { ...row, owner_user_id: userId });
         n += 1;
       }
-    });
+    }
+  });
   return n;
 }
 
 export async function deleteOrphanEntries(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const store = getLifeDb();
-  const rows = await store.entries.bulkGet(ids);
-  const orphans = rows.filter((r): r is PendingEntry => Boolean(r && !r.owner_user_id));
-  await store.entries.bulkDelete(orphans.map((r) => r.id));
+  for (const id of ids) {
+    const row = await getEntry(store, id);
+    if (row && !row.owner_user_id) await deleteEntry(store, id);
+  }
 }
 
 export async function persistServerEntries(items: EntryRead[], owner: string, store?: LifeLogDB): Promise<void> {
@@ -623,10 +645,10 @@ export async function persistServerEntries(items: EntryRead[], owner: string, st
     };
   };
   const { db: target } = resolveQueueAccess(store);
-  await target.transaction("rw", target.entries, async () => {
+  await target.transaction("rw", target.outbox, async () => {
     for (const item of items) {
-      const next = upsert(await target.entries.get(item.id), item);
-      if (next) await target.entries.put(next);
+      const next = upsert(await getEntry(target, item.id), item);
+      if (next) await putEntry(target, next);
     }
   });
 }
@@ -645,10 +667,10 @@ export async function applyEntryTombstones(
     return row.status === "synced" || row.status === "pending_delete";
   };
   const { db } = resolveQueueAccess(store);
-  await db.transaction("rw", db.entries, async () => {
+  await db.transaction("rw", db.outbox, async () => {
     for (const item of items) {
-      const row = await db.entries.get(item.id);
-      if (droppable(row, item.version)) await db.entries.delete(item.id);
+      const row = await getEntry(db, item.id);
+      if (droppable(row, item.version)) await deleteEntry(db, item.id);
     }
   });
 }

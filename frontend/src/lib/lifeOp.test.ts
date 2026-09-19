@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
 import { webcrypto } from "node:crypto";
 import { db, migrateLifeOpRow } from "../db/offlineQueue.ts";
+import { getLife, getOp, listLife, listOps, putLife, putOp } from "../db/outbox.ts";
 import { resetTestDb } from "../test/resetDb.ts";
 import { setCurrentUserId, setEncryptAllowed } from "./accountScope.ts";
 import { deriveKEK } from "./crypto.ts";
@@ -77,13 +78,13 @@ describe("durable feedback operation", () => {
       fields: fields({ what_changed: MARK_WHAT, difficulty: MARK_DIFF, plan_text: MARK_PLAN }),
       planSnapshot: MARK_PLAN,
     });
-    const dumped = `${JSON.stringify(op)}\n${JSON.stringify(await store.life_ops.toArray())}\n${JSON.stringify((await store.life_queue.toArray()).map((row) => ({ id: row.id, kind: row.kind, status: row.status, payload: { ...row.payload, encrypted_content: "x", encrypted_dek: "y" } })))}`;
+    const dumped = `${JSON.stringify(op)}\n${JSON.stringify(await listOps(store))}\n${JSON.stringify((await listLife(store)).map((row) => ({ id: row.id, kind: row.kind, status: row.status, payload: { ...row.payload, encrypted_content: "x", encrypted_dek: "y" } })))}`;
     assert.equal(dumped.includes(MARK_WHAT), false, dumped);
     assert.equal(dumped.includes(MARK_DIFF), false);
     assert.equal(dumped.includes(MARK_PLAN), false);
     assert.equal("intent_key" in op, false);
     assert.equal(op.submission_id, "sub-plain");
-    const rawOp = JSON.stringify(await store.life_ops.get(op.id));
+    const rawOp = JSON.stringify(await getOp(store, op.id));
     assert.equal(rawOp.includes(MARK_WHAT), false);
     assert.ok(String(op.feedback_payload?.encrypted_content ?? "").length > 8);
   });
@@ -116,7 +117,7 @@ describe("durable feedback operation", () => {
     assert.equal(migrated.intent_key, undefined);
     assert.equal(migrated.submission_id, "legacy-sub");
     assert.equal(JSON.stringify(migrated).includes(MARK_WHAT), false);
-    await store.life_ops.put(migrated as typeof first.op);
+    await putOp(store, migrated as typeof first.op);
     const retry = await commitFeedbackDecision({
       kek,
       action: action(),
@@ -127,7 +128,7 @@ describe("durable feedback operation", () => {
     });
     assert.equal(retry.op.feedback_id, first.op.feedback_id);
     assert.equal(retry.reusedCipher, true);
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 1);
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 1);
   });
 
   it("stores outcome and decision separately and reuses the same ids after a crash", async () => {
@@ -150,8 +151,8 @@ describe("durable feedback operation", () => {
         }),
       /crash_after_local/,
     );
-    const feedbackRows = (await store.life_queue.toArray()).filter((row) => row.kind === "feedback");
-    const actionRow = await store.life_queue.get("a1");
+    const feedbackRows = (await listLife(store)).filter((row) => row.kind === "feedback");
+    const actionRow = await getLife(store, "a1");
     assert.equal(feedbackRows.length, 1);
     assert.equal(feedbackRows[0].payload.outcome_kind, "tried_no_effect");
     assert.equal(actionRow?.payload.state, "completed");
@@ -174,8 +175,8 @@ describe("durable feedback operation", () => {
     });
     assert.equal(retry.reusedCipher, true);
     assert.equal(retry.op.feedback_id, firstId);
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 1);
-    assert.equal((await store.life_queue.get(firstId))?.payload.encrypted_content, cipher);
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 1);
+    assert.equal((await getLife(store, firstId))?.payload.encrypted_content, cipher);
   });
 
   it("keeps helped + stop when the user chose both explicitly", async () => {
@@ -190,8 +191,8 @@ describe("durable feedback operation", () => {
       submissionId: "sub-stop",
       fields: fields({ what_changed: "уснул раньше", difficulty: "", observed_on: "" }),
     });
-    assert.equal((await store.life_queue.get("a1"))?.payload.state, "stopped");
-    const fb = (await store.life_queue.toArray()).find((row) => row.kind === "feedback");
+    assert.equal((await getLife(store, "a1"))?.payload.state, "stopped");
+    const fb = (await listLife(store)).find((row) => row.kind === "feedback");
     assert.equal(fb?.payload.outcome_kind, "tried_helped");
   });
 
@@ -199,7 +200,7 @@ describe("durable feedback operation", () => {
     const store = db;
     setCurrentUserId("u1");
     setEncryptAllowed(true);
-    await store.life_queue.put({
+    await putLife(store, {
       id: "a1",
       kind: "action",
       payload: { id: "a1", state: "accepted", version: 9, encrypted_content: "other-device", encrypted_dek: "d" },
@@ -220,8 +221,8 @@ describe("durable feedback operation", () => {
         }),
       ActionChangedError,
     );
-    assert.equal((await store.life_queue.get("a1"))?.payload.encrypted_content, "other-device");
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 0);
+    assert.equal((await getLife(store, "a1"))?.payload.encrypted_content, "other-device");
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 0);
   });
 
   it("marks a partial ack so reload can finish the action half", async () => {
@@ -242,16 +243,16 @@ describe("durable feedback operation", () => {
         owner: "u1",
         kind: "feedback",
         local_rev: op.feedback_local_rev ?? 1,
-        payload: (await store.life_queue.get(op.feedback_id))!.payload,
+        payload: (await getLife(store, op.feedback_id))!.payload,
         status: "pending",
       },
       { status: "created", version: 1 },
     );
     await refreshLifeOpStatus("u1");
-    assert.equal((await store.life_ops.get(op.id))?.status, "feedback_acked");
-    assert.equal((await store.life_queue.get("a1"))?.status, "pending");
-    assert.equal((await store.life_queue.get(op.feedback_id))?.status, "synced");
-    assert.ok((await store.life_ops.get(op.id))?.feedback_payload);
+    assert.equal((await getOp(store, op.id))?.status, "feedback_acked");
+    assert.equal((await getLife(store, "a1"))?.status, "pending");
+    assert.equal((await getLife(store, op.feedback_id))?.status, "synced");
+    assert.ok((await getOp(store, op.id))?.feedback_payload);
   });
 
   it("keeps one op for parallel commits of the same submission_id", async () => {
@@ -269,8 +270,8 @@ describe("durable feedback operation", () => {
     };
     const [a, b] = await Promise.all([commitFeedbackDecision(body), commitFeedbackDecision(body)]);
     assert.equal(a.op.id, b.op.id);
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 1);
-    assert.equal((await store.life_ops.toArray()).filter((row) => row.status !== "superseded").length, 1);
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 1);
+    assert.equal((await listOps(store)).filter((row) => row.status !== "superseded").length, 1);
   });
 
   it("creates two feedbacks for two submission ids", async () => {
@@ -293,10 +294,10 @@ describe("durable feedback operation", () => {
       submissionId: "sub-b",
       fields: fields({ what_changed: "второе" }),
     });
-    const feedbacks = (await store.life_queue.toArray()).filter((row) => row.kind === "feedback");
+    const feedbacks = (await listLife(store)).filter((row) => row.kind === "feedback");
     assert.equal(feedbacks.length, 2);
-    const open = (await store.life_ops.toArray()).filter((row) => row.status !== "superseded" && row.status !== "done");
-    const superseded = (await store.life_ops.toArray()).filter((row) => row.status === "superseded");
+    const open = (await listOps(store)).filter((row) => row.status !== "superseded" && row.status !== "done");
+    const superseded = (await listOps(store)).filter((row) => row.status === "superseded");
     assert.equal(open.length, 1);
     assert.equal(superseded.length, 1);
   });
@@ -305,7 +306,7 @@ describe("durable feedback operation", () => {
     const store = db;
     setCurrentUserId("u1");
     setEncryptAllowed(true);
-    await store.life_queue.put({
+    await putLife(store, {
       id: "a1",
       kind: "action",
       payload: { id: "a1", state: "accepted", version: 4, encrypted_content: "current", encrypted_dek: "d" },
@@ -325,8 +326,8 @@ describe("durable feedback operation", () => {
           submissionId: "sub-race",
           fields: fields({ what_changed: "старый черновик" }),
           afterEncrypt: async () => {
-            const row = (await store.life_queue.get("a1"))!;
-            await store.life_queue.put({
+            const row = (await getLife(store, "a1"))!;
+            await putLife(store, {
               ...row,
               local_rev: (row.local_rev ?? 0) + 1,
               payload: { ...row.payload, encrypted_content: "newer" },
@@ -335,15 +336,15 @@ describe("durable feedback operation", () => {
         }),
       ActionChangedError,
     );
-    assert.equal((await store.life_queue.get("a1"))?.payload.encrypted_content, "newer");
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 0);
+    assert.equal((await getLife(store, "a1"))?.payload.encrypted_content, "newer");
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 0);
   });
 
   it("rejects when the server version grows before the write transaction", async () => {
     const store = db;
     setCurrentUserId("u1");
     setEncryptAllowed(true);
-    await store.life_queue.put({
+    await putLife(store, {
       id: "a1",
       kind: "action",
       payload: { id: "a1", state: "accepted", version: 4, encrypted_content: "v4", encrypted_dek: "d" },
@@ -363,8 +364,8 @@ describe("durable feedback operation", () => {
           submissionId: "sub-cas",
           fields: fields({ what_changed: "кас" }),
           afterEncrypt: async () => {
-            const row = (await store.life_queue.get("a1"))!;
-            await store.life_queue.put({
+            const row = (await getLife(store, "a1"))!;
+            await putLife(store, {
               ...row,
               server_version: 10,
               payload: { ...row.payload, version: 10, encrypted_content: "v10" },
@@ -373,7 +374,7 @@ describe("durable feedback operation", () => {
         }),
       ActionChangedError,
     );
-    assert.equal((await store.life_queue.get("a1"))?.payload.encrypted_content, "v10");
+    assert.equal((await getLife(store, "a1"))?.payload.encrypted_content, "v10");
   });
 
   it("does not mark done from a later action sync after a lost op ack", async () => {
@@ -388,28 +389,28 @@ describe("durable feedback operation", () => {
       submissionId: "sub-lost",
       fields: fields({ what_changed: "потерянный ack" }),
     });
-    const actionRow = (await store.life_queue.get("a1"))!;
-    await store.life_queue.put({
+    const actionRow = (await getLife(store, "a1"))!;
+    await putLife(store, {
       ...actionRow,
       local_rev: (actionRow.local_rev ?? 1) + 3,
       status: "synced",
       server_version: 12,
     });
     await refreshLifeOpStatus("u1");
-    assert.equal((await store.life_ops.get(op.id))?.status, "local");
+    assert.equal((await getOp(store, op.id))?.status, "local");
     await applyLifeResult(
       {
         id: op.feedback_id,
         owner: "u1",
         kind: "feedback",
         local_rev: op.feedback_local_rev ?? 1,
-        payload: (await store.life_queue.get(op.feedback_id))!.payload,
+        payload: (await getLife(store, op.feedback_id))!.payload,
         status: "pending",
       },
       { status: "created", version: 1 },
     );
     await refreshLifeOpStatus("u1");
-    assert.equal((await store.life_ops.get(op.id))?.status, "feedback_acked");
+    assert.equal((await getOp(store, op.id))?.status, "feedback_acked");
     await applyLifeResult(
       {
         id: "a1",
@@ -422,7 +423,7 @@ describe("durable feedback operation", () => {
       { status: "updated", version: 5 },
     );
     await refreshLifeOpStatus("u1");
-    const done = await store.life_ops.get(op.id);
+    const done = await getOp(store, op.id);
     assert.equal(done?.status, "done");
     assert.equal(done?.feedback_payload, null);
     assert.equal(done?.action_payload, null);
@@ -446,7 +447,7 @@ describe("durable feedback operation", () => {
         owner: "u1",
         kind: "feedback",
         local_rev: op.feedback_local_rev ?? 1,
-        payload: (await store.life_queue.get(op.feedback_id))!.payload,
+        payload: (await getLife(store, op.feedback_id))!.payload,
         status: "pending",
       },
       { status: "created", version: 1 },
@@ -457,14 +458,14 @@ describe("durable feedback operation", () => {
         owner: "u1",
         kind: "action",
         local_rev: op.action_local_rev ?? 1,
-        payload: (await store.life_queue.get("a1"))!.payload,
+        payload: (await getLife(store, "a1"))!.payload,
         status: "pending",
       },
       { status: "conflict", reason: "version_mismatch", version: 9 },
     );
     await refreshLifeOpStatus("u1");
-    assert.equal((await store.life_ops.get(op.id))?.status, "action_conflict");
-    assert.equal((await store.life_queue.get(op.feedback_id))?.status, "synced");
+    assert.equal((await getOp(store, op.id))?.status, "action_conflict");
+    assert.equal((await getLife(store, op.feedback_id))?.status, "synced");
   });
 
   it("does not move a completed action when a historical continue is corrected", async () => {
@@ -480,13 +481,13 @@ describe("durable feedback operation", () => {
       fields: fields({ what_changed: "закрыл", observed_on: "2026-09-12" }),
       planSnapshot: "экраны в 23:00",
     });
-    const actionRow = (await store.life_queue.get("a1"))!;
-    await store.life_queue.put({ ...actionRow, status: "synced", server_version: 5, payload: { ...actionRow.payload, state: "completed", version: 5 } });
-    const fb = (await store.life_queue.get(first.op.feedback_id))!;
+    const actionRow = (await getLife(store, "a1"))!;
+    await putLife(store, { ...actionRow, status: "synced", server_version: 5, payload: { ...actionRow.payload, state: "completed", version: 5 } });
+    const fb = (await getLife(store, first.op.feedback_id))!;
     fb.status = "synced";
     fb.server_version = 1;
-    await store.life_queue.put(fb);
-    await store.life_ops.put({ ...first.op, status: "done", feedback_acked: true, action_acked: true, feedback_payload: null, action_payload: null });
+    await putLife(store, fb);
+    await putOp(store, { ...first.op, status: "done", feedback_acked: true, action_acked: true, feedback_payload: null, action_payload: null });
 
     const existing: LifeFeedbackRead = {
       id: first.op.feedback_id,
@@ -515,7 +516,7 @@ describe("durable feedback operation", () => {
       fields: fields({ what_changed: "поправил оценку", observed_on: "2026-09-12" }),
       planSnapshot: "экраны в 23:00",
     });
-    assert.equal((await store.life_queue.get("a1"))?.payload.state, "completed");
+    assert.equal((await getLife(store, "a1"))?.payload.state, "completed");
     assert.equal(correction.op.kind, "feedback_correction");
     assert.equal(correction.op.action_payload, null);
     assert.equal(correction.op.feedback_id, first.op.feedback_id);
@@ -537,7 +538,7 @@ describe("durable feedback operation", () => {
       planSnapshot: "экраны в 23:00",
     });
     assert.equal(retry.op.feedback_id, first.op.feedback_id);
-    assert.equal((await store.life_queue.toArray()).filter((row) => row.kind === "feedback").length, 1);
+    assert.equal((await listLife(store)).filter((row) => row.kind === "feedback").length, 1);
     const row = await readLifeRow(first.op.feedback_id);
     assert.equal(row?.id, first.op.feedback_id);
   });

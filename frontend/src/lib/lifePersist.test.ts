@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { db } from "../db/offlineQueue.ts";
+import { getLife, listLife, putLife } from "../db/outbox.ts";
 import { resetTestDb } from "../test/resetDb.ts";
 import {
   enqueueLife,
@@ -39,8 +40,8 @@ describe("life cache and conflict resolve", () => {
       },
       "u1",
     );
-    assert.equal((await db.life_queue.get("g-remote"))?.status, "synced");
-    const merged = mergeLifeBundle(undefined, await db.life_queue.toArray(), "u1");
+    assert.equal((await getLife(db, "g-remote"))?.status, "synced");
+    const merged = mergeLifeBundle(undefined, await listLife(db), "u1");
     assert.equal(merged.goals[0].id, "g-remote");
   });
 
@@ -68,14 +69,14 @@ describe("life cache and conflict resolve", () => {
       },
       "u1",
     );
-    const row = await db.life_queue.get("g1");
+    const row = await getLife(db, "g1");
     assert.equal(row?.status, "pending");
     assert.equal(row?.payload.encrypted_content, "local");
     assert.equal(row?.server_snapshot?.encrypted_content, "server");
   });
 
   it("keeps the server copy only after an explicit resolve", async () => {
-    await db.life_queue.put({
+    await putLife(db, {
       id: "g1",
       kind: "goal",
       payload: { encrypted_content: "local", encrypted_dek: "d", state: "active" },
@@ -88,11 +89,11 @@ describe("life cache and conflict resolve", () => {
       server_snapshot: { encrypted_content: "server", encrypted_dek: "d", state: "active", version: 5 },
     });
     await resolveLifeKeepServer("g1", "u1");
-    assert.equal((await db.life_queue.get("g1"))?.status, "synced");
-    assert.equal((await db.life_queue.get("g1"))?.payload.encrypted_content, "server");
+    assert.equal((await getLife(db, "g1"))?.status, "synced");
+    assert.equal((await getLife(db, "g1"))?.payload.encrypted_content, "server");
     await resolveLifeApplyLocal("g1", "u1");
-    assert.equal((await db.life_queue.get("g1"))?.status, "pending");
-    assert.equal((await db.life_queue.get("g1"))?.server_version, 5);
+    assert.equal((await getLife(db, "g1"))?.status, "pending");
+    assert.equal((await getLife(db, "g1"))?.server_version, 5);
   });
 
   it("keeps an August created_at after a September cache write", async () => {
@@ -117,7 +118,7 @@ describe("life cache and conflict resolve", () => {
       },
       "u1",
     );
-    const merged = mergeLifeBundle(undefined, await db.life_queue.toArray(), "u1");
+    const merged = mergeLifeBundle(undefined, await listLife(db), "u1");
     assert.equal(merged.actions[0].created_at, "2026-08-02T10:00:00.000Z");
   });
 
@@ -147,13 +148,13 @@ describe("life cache and conflict resolve", () => {
       },
       "u1",
     );
-    assert.equal((await db.life_queue.get("g1"))?.server_version, 8);
-    assert.equal((await db.life_queue.get("g1"))?.payload.encrypted_content, "v8");
+    assert.equal((await getLife(db, "g1"))?.server_version, 8);
+    assert.equal((await getLife(db, "g1"))?.payload.encrypted_content, "v8");
     const staleServer = {
       ...base,
       goals: [{ ...base.goals[0], encrypted_content: "v7", version: 7 }],
     };
-    const merged = mergeLifeBundle(staleServer, await db.life_queue.toArray(), "u1");
+    const merged = mergeLifeBundle(staleServer, await listLife(db), "u1");
     assert.equal(merged.goals[0].encrypted_content, "v8");
     assert.equal(merged.goals[0].version, 8);
   });

@@ -13,6 +13,7 @@ export async function resetTestDb(store: LifeLogDB = db): Promise<void> {
         store.kek_verifiers.clear(),
         store.life_queue.clear(),
         store.life_ops.clear(),
+        store.outbox.clear(),
       ]);
     },
   );

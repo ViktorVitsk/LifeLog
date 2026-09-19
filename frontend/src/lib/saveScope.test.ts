@@ -8,6 +8,7 @@ import {
 } from "./accountScope.ts";
 import { encryptAndEnqueue } from "./entrySubmit.ts";
 import { db, getPendingForSync } from "../db/offlineQueue.ts";
+import { getEntry, getLife } from "../db/outbox.ts";
 import { resetTestDb } from "../test/resetDb.ts";
 import { encryptLifePayload, enqueueLife, getPendingLife } from "./lifeQueue.ts";
 
@@ -44,7 +45,7 @@ describe("save scope across account switch", () => {
     release();
     const saved = await pending;
 
-    const row = await db.entries.get(saved.id);
+    const row = await getEntry(db, saved.id);
     assert.equal(row?.owner_user_id, "user-a");
     assert.equal(getCurrentUserId(), "user-b");
     assert.equal((await getPendingForSync(50, "user-b")).length, 0);
@@ -80,7 +81,7 @@ describe("save scope across account switch", () => {
     release();
     const id = await work;
 
-    assert.equal((await db.life_queue.get(id))?.owner_user_id, "user-a");
+    assert.equal((await getLife(db, id))?.owner_user_id, "user-a");
     assert.equal((await getPendingLife("user-b")).length, 0);
     assert.equal((await getPendingLife("user-a")).length, 1);
   });

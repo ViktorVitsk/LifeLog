@@ -9,6 +9,7 @@ import {
   type LifeOpKind,
   type PendingLife,
 } from "../db/offlineQueue.ts";
+import { getOp, listOps, putLife, putOp } from "../db/outbox.ts";
 import type { LifeActionRead, LifeFeedbackRead } from "./api.ts";
 import {
   actionPatchForDecision,
@@ -56,18 +57,17 @@ export function opDeliveryLabel(op: LifeOp, feedback?: PendingLife, action?: Pen
   return "on_device";
 }
 
-async function listOps(owner: string, store?: LifeLogDB): Promise<LifeOp[]> {
+async function listOpsForOwner(owner: string, store?: LifeLogDB): Promise<LifeOp[]> {
   const { db } = resolveQueueAccess(store);
-  const rows = await db.life_ops.toArray();
-  return rows.filter((row) => row.owner_user_id === owner);
+  return listOps(db, owner);
 }
 
 export async function listLifeOps(owner: string, store?: LifeLogDB): Promise<LifeOp[]> {
-  return listOps(owner, store);
+  return listOpsForOwner(owner, store);
 }
 
 export async function listOpenLifeOps(owner: string, store?: LifeLogDB): Promise<LifeOp[]> {
-  return (await listOps(owner, store)).filter((row) => row.status !== "done" && row.status !== "superseded");
+  return (await listOpsForOwner(owner, store)).filter((row) => row.status !== "done" && row.status !== "superseded");
 }
 
 export async function findOpenFeedbackOp(owner: string, actionId: string, store?: LifeLogDB): Promise<LifeOp | undefined> {
@@ -75,17 +75,17 @@ export async function findOpenFeedbackOp(owner: string, actionId: string, store?
 }
 
 export async function findOpBySubmission(owner: string, submissionId: string, store?: LifeLogDB): Promise<LifeOp | undefined> {
-  return (await listOps(owner, store)).find((row) => row.submission_id === submissionId && row.status !== "superseded");
+  return (await listOpsForOwner(owner, store)).find((row) => row.submission_id === submissionId && row.status !== "superseded");
 }
 
 export async function putLifeOp(op: LifeOp, store?: LifeLogDB): Promise<void> {
   const { db } = resolveQueueAccess(store);
-  await db.life_ops.put(op);
+  await putOp(db, op);
 }
 
 async function readOp(id: string, store?: LifeLogDB): Promise<LifeOp | undefined> {
   const { db } = resolveQueueAccess(store);
-  return db.life_ops.get(id);
+  return getOp(db, id);
 }
 
 function actionLooksNewer(existing: PendingLife | undefined, expectedVersion: number | null | undefined, expectedLocalRev?: number | null): boolean {
@@ -196,7 +196,7 @@ function sameFeedbackIntent(
 
 async function runWriteTx<T>(store: LifeLogDB | undefined, fn: () => Promise<T>): Promise<T> {
   const { db } = resolveQueueAccess(store);
-  return db.transaction("rw", db.life_queue, db.life_ops, fn);
+  return db.transaction("rw", db.outbox, fn);
 }
 
 async function readActionInTx(id: string, store?: LifeLogDB): Promise<PendingLife | undefined> {
@@ -205,9 +205,9 @@ async function readActionInTx(id: string, store?: LifeLogDB): Promise<PendingLif
 
 async function writeRows(op: LifeOp, feedback: PendingLife, action: PendingLife | undefined, store?: LifeLogDB): Promise<void> {
   const { db } = resolveQueueAccess(store);
-  await db.life_queue.put(feedback);
-  if (action) await db.life_queue.put(action);
-  await db.life_ops.put(op);
+  await putLife(db, feedback);
+  if (action) await putLife(db, action);
+  await putOp(db, op);
 }
 
 export async function refreshLifeOpStatus(owner: string, store?: LifeLogDB): Promise<void> {

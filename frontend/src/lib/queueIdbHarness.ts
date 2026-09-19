@@ -9,6 +9,7 @@ import {
 import { deriveKEK } from "./crypto.ts";
 import { commitFeedbackDecision, findOpenFeedbackOp } from "./lifeOp.ts";
 import { applyLifeResult, claimLifeForSend, enqueueLife, persistServerLife } from "./lifeQueue.ts";
+import { getEntry, getLife, listLife } from "../db/outbox.ts";
 import { applyRevisionAck } from "./queueAck.ts";
 
 interface HarnessRow {
@@ -116,7 +117,7 @@ export async function runProductionQueueIdb(): Promise<{ ok: boolean; notes: str
       iso,
     );
     await applyEntryResult(claimed[0], { status: "updated", version: 8 }, iso);
-    const afterAck = await iso.entries.get("e1");
+    const afterAck = await getEntry(iso, "e1");
     const entryOk =
       afterAck?.encrypted_content === "B" &&
       afterAck.local_rev === 2 &&
@@ -126,7 +127,7 @@ export async function runProductionQueueIdb(): Promise<{ ok: boolean; notes: str
 
     const secondClaim = await claimPendingEntries(10, "iso-owner", iso);
     await applyEntryResult(secondClaim[0], { status: "updated", version: 8 }, iso);
-    const synced = await iso.entries.get("e1");
+    const synced = await getEntry(iso, "e1");
     notes.push(`entry synced status=${synced?.status} created=${synced?.created_at}`);
     const createdOk = Boolean(synced?.created_at);
 
@@ -148,7 +149,7 @@ export async function runProductionQueueIdb(): Promise<{ ok: boolean; notes: str
       "iso-owner",
       iso,
     );
-    const afterStale = await iso.entries.get("e1");
+    const afterStale = await getEntry(iso, "e1");
     const staleOk = afterStale?.encrypted_content !== "OLD" && afterStale?.version === 8;
     notes.push(`stale persist kept v=${afterStale?.version} payload=${afterStale?.encrypted_content}`);
 
@@ -189,7 +190,7 @@ export async function runProductionQueueIdb(): Promise<{ ok: boolean; notes: str
       "iso-owner",
       iso,
     );
-    const goal = await iso.life_queue.get("g1");
+    const goal = await getLife(iso, "g1");
     const goalOk = goal?.payload.encrypted_content === "goal-v8" && (goal.server_version === 8 || goal.payload.version === 8);
     notes.push(`goal after stale server v=${goal?.server_version} ct=${String(goal?.payload.encrypted_content)}`);
 
@@ -255,7 +256,7 @@ export async function runProductionQueueIdb(): Promise<{ ok: boolean; notes: str
       scope,
       store: iso,
     });
-    const feedbacks = (await iso.life_queue.toArray()).filter((row) => row.kind === "feedback");
+    const feedbacks = (await listLife(iso)).filter((row) => row.kind === "feedback");
     const opOk = crashed && Boolean(open) && retry.reusedCipher && feedbacks.length === 1 && open?.feedback_id === retry.op.feedback_id;
     notes.push(`feedback crash=${crashed} reused=${retry.reusedCipher} n=${feedbacks.length} op=${open?.id}`);
 

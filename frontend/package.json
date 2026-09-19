@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "npm run test:unit && npm run test:component",
-    "test:unit": "node --experimental-strip-types --import fake-indexeddb/auto --test src/agent/*.test.ts src/lib/*.test.ts src/sync/*.test.ts",
+    "test:unit": "node --experimental-strip-types --import fake-indexeddb/auto --test src/agent/*.test.ts src/lib/*.test.ts src/sync/*.test.ts src/db/*.test.ts",
     "test:component": "playwright test -c playwright-ct.config.ts",
     "test:e2e": "playwright test"
   },

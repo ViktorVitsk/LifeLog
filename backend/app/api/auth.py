@@ -1,11 +1,12 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import (
     create_access_token,
@@ -25,9 +26,15 @@ from app.schemas.auth import (
     TimezonePut,
 )
 from app.services.calendar_days import DEFAULT_TIMEZONE, validate_timezone
+from app.services.login_throttle import LoginThrottle
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
+login_throttle = LoginThrottle(
+    max_failures=settings.login_max_failures,
+    window_seconds=settings.login_failure_window_seconds,
+)
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
@@ -59,14 +66,30 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> LoginResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    client_ip = request.client.host if request.client is not None else "unknown"
+    throttle_key = (client_ip, payload.username)
+    retry_after = login_throttle.retry_after(throttle_key)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     result = await db.execute(select(User).where(User.username == payload.username))
     user = result.scalar_one_or_none()
     if user is None or not verify_password(payload.password, user.password_hash):
+        login_throttle.record_failure(throttle_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+    login_throttle.reset(throttle_key)
     token = create_access_token(subject=user.id)
     logger.info("user login id=%s", user.id)
     return LoginResponse(access_token=token, salt=user.password_salt)

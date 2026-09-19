@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="change-me", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=10080, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    login_max_failures: int = Field(default=5, ge=1, alias="LOGIN_MAX_FAILURES")
+    login_failure_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        alias="LOGIN_FAILURE_WINDOW_SECONDS",
+    )
 
     pbkdf2_iterations: int = Field(default=100_000, alias="PBKDF2_ITERATIONS")
 

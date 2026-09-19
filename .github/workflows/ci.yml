@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --locked
+      - name: Lint
+        working-directory: backend
+        run: uv run ruff check .
+      - name: Unit tests
+        working-directory: backend
+        run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
+
+  live-api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lifelog
+          POSTGRES_PASSWORD: lifelog
+          POSTGRES_DB: lifelog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lifelog -d lifelog"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://lifelog:lifelog@127.0.0.1:5432/lifelog
+      JWT_SECRET: ci-only-not-for-production
+      LIFELOG_LIVE_API: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --locked
+      - name: Apply migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
+      - name: Start API and run live tests
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8001 >uvicorn-ci.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8001/health >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              cat uvicorn-ci.log
+              exit 1
+            fi
+            if [[ "$attempt" == "30" ]]; then
+              cat uvicorn-ci.log
+              exit 1
+            fi
+            sleep 1
+          done
+          uv run pytest

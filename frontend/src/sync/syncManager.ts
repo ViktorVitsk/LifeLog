@@ -1,15 +1,10 @@
-import {
-  applyEntryResult,
-  applyEntryTombstones,
-  claimPendingEntries,
-  persistServerEntries,
-  type EntrySendSnapshot,
-} from "../db/offlineQueue";
-import { api, isAuthError, isNetworkError } from "../lib/api";
+import { applyEntryTombstones, persistServerEntries } from "../db/offlineQueue";
+import { api } from "../lib/api";
 import { applyLifeTombstones, persistServerLife } from "../lib/lifeQueue";
 import { resumeFeedbackOps } from "../lib/lifeOp";
-import { flushLifeQueue } from "../lib/lifeStore";
+import { flushOutboxUnlocked } from "../lib/flushOutbox";
 import { withSyncLock } from "../lib/syncLock.ts";
+import { getCurrentUserId } from "../lib/accountScope.ts";
 
 export interface SyncResult {
   attempted: number;
@@ -41,62 +36,12 @@ export async function runSyncOnce(token: string, userId?: string): Promise<SyncR
   return withSyncLock(() => runSyncOnceUnlocked(token, userId));
 }
 
-async function applySnapshots(
-  snapshots: EntrySendSnapshot[],
-  results: { id: string; status: string; reason?: string | null; version?: number | null }[],
-): Promise<{ saved: number; failed: number; deleted: number }> {
-  const byId = new Map(results.map((row) => [row.id, row]));
-  let saved = 0;
-  let failed = 0;
-  let deleted = 0;
-  for (const snap of snapshots) {
-    const result = byId.get(snap.id) ?? { id: snap.id, status: "error", reason: "missing_result" };
-    await applyEntryResult(snap, result);
-    if (result.status === "created" || result.status === "duplicate" || result.status === "updated") saved += 1;
-    else if (result.status === "deleted") deleted += 1;
-    else if (result.status === "conflict" || result.status === "rejected") failed += 1;
-  }
-  return { saved, failed, deleted };
-}
-
 async function runSyncOnceUnlocked(token: string, userId?: string): Promise<SyncResult> {
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    return { attempted: 0, saved: 0, failed: 0, error: "offline" };
-  }
-
-  const snapshots = await claimPendingEntries(100, userId);
-  if (snapshots.length === 0) {
-    if (userId) await pullRemoteDeletes(token, userId);
-    return { attempted: 0, saved: 0, failed: 0 };
-  }
-
-  try {
-    const resp = await api.syncEntries(
-      snapshots.map((snap) => snap.payload),
-      token,
-    );
-    const counts = await applySnapshots(snapshots, resp.results ?? []);
-    if (userId) await pullRemoteDeletes(token, userId);
-    return {
-      attempted: snapshots.length,
-      saved: counts.saved,
-      failed: counts.failed,
-      deleted: counts.deleted,
-      error: resp.results?.find((row) => row.status === "conflict" || row.status === "rejected")?.reason ?? undefined,
-    };
-  } catch (e) {
-    if (isNetworkError(e)) {
-      return { attempted: snapshots.length, saved: 0, failed: 0, error: "offline" };
-    }
-    if (isAuthError(e)) {
-      return { attempted: snapshots.length, saved: 0, failed: 0, error: "auth" };
-    }
-    const msg = (e as Error).message ?? "sync failed";
-    for (const snap of snapshots) {
-      await applyEntryResult(snap, { status: "error", reason: msg });
-    }
-    return { attempted: snapshots.length, saved: 0, failed: snapshots.length, error: msg };
-  }
+  const owner = userId ?? getCurrentUserId();
+  if (!owner) return { attempted: 0, saved: 0, failed: 0 };
+  const result = await flushOutboxUnlocked(token, owner);
+  if (owner) await pullRemoteDeletes(token, owner);
+  return result;
 }
 
 export interface SyncManagerHandle {
@@ -124,7 +69,6 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
     if (!token || !userId) return;
     inFlight = (async () => {
       const r = await runSyncOnce(token, userId);
-      const lifeSaved = await flushLifeQueue(token, userId).catch(() => 0);
       await resumeFeedbackOps(userId);
       try {
         const tombs = await api.getLifeTombstones(token);
@@ -133,7 +77,7 @@ export function startSyncManager(opts: StartSyncOptions): SyncManagerHandle {
         /* keep local life rows unless an explicit tombstone arrives */
       }
       await refreshLifeCache(token, userId);
-      onResult?.(lifeSaved ? { ...r, saved: r.saved + lifeSaved } : r);
+      onResult?.(r);
     })().finally(() => {
       inFlight = null;
     });

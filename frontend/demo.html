@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LifeLog — fictional demo</title>
+    <style>
+      body { font: 17px/1.6 system-ui; background: #18181b; color: #e4e4e7; max-width: 720px; margin: 4rem auto; padding: 1rem; }
+      button, a { color: #c7d2fe; } button { font: inherit; background: #312e81; border: 1px solid #818cf8; border-radius: 8px; padding: .6rem 1rem; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: wait; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #27272a; padding: 1rem; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>LifeLog fictional demo</h1>
+    <p>Create a fresh demo account with two weeks of explicitly fictional observations, a habit, a skill and a goal. No AI API key or external model calls are used.</p>
+    <p>Use a private browser window and a disposable local database. The demo password below is public; this account must never hold personal information. This page adds data and does not reset any account.</p>
+    <button id="seed" type="button">Create fictional demo</button>
+    <pre id="status" role="status">Ready. The local API must be running.</pre>
+    <p><a href="/login">Open LifeLog and sign in</a></p>
+    <script type="module" src="/src/demo/main.ts"></script>
+  </body>
+</html>

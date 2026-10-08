@@ -1,5 +1,4 @@
 import type { ChatCompletionMessage, LlmSettings, ToolCall, ToolDef } from "./types.ts";
-import { defaultSyntheticHandler } from "./syntheticScript.ts";
 
 export interface ChatChunk {
   content?: string;
@@ -62,7 +61,8 @@ export async function completeChat(args: {
       { messages: args.messages, at: Date.now() };
   }
   if (args.settings.provider === "synthetic") {
-    const handler = syntheticHandler ?? defaultSyntheticHandler;
+    if (import.meta.env?.PROD) throw new Error("Synthetic provider is only available in development.");
+    const handler = syntheticHandler ?? (await import("./syntheticScript.ts")).defaultSyntheticHandler;
     let emitted = false;
     const onDelta = (text: string) => {
       emitted = true;

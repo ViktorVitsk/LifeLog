@@ -1,336 +1,131 @@
 # LifeLog
 
-Personal journaling and tracking with **hybrid client-side encryption**: diary text is encrypted in the browser before sync; open numeric metrics stay available for charts. This is not end-to-end encryption against the login server — the same master password is sent to `/api/auth/login` and used to derive the on-device key.
+**A personal journal and structured observation log with browser-side encryption, an offline queue, and user-confirmed AI proposals.**
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`docs/implementation-plan.md`](./docs/implementation-plan.md).
+LifeLog is an independent, AI-assisted Fullstack/AI project, built for personal use. It is an **experimental MVP**: suitable for local evaluation and portfolio review, with explicit security and operational limits. It is not a medical or diagnostic product.
 
----
+The long-term idea is to accumulate a useful personal history that future, more capable AI systems could help analyse—possibly including AGI. That is a motivation, not an implemented capability or a claim about present-day models.
 
-## Phase status
+## What you can try today
 
-| Phase | Status | What it delivers |
-|---|---|---|
-| 1 — Core foundation | ✅ done | Docker stack, DB schema, JWT auth, encrypted entries sync, Web Crypto module |
-| 2 — Daily check-in | ✅ done | `/checkin` with dynamic forms, Dexie offline queue, SyncManager, `/dashboard` with mood trend |
-| 3 — Psychology | ✅ done | `/psychology` with gap-model chart, pattern insights, gratitude log, emotional history (lazy decrypt); EMOTIONAL_STATE form in Check-in |
-| 4 — Skills & habits | ✅ done | `/api/skills` + `/api/habits`, `/skills` builder + session chart, `/habits` + heatmap, Check-in **Skill** / **Habit** tabs |
-| 5 — Analytics & polish | ✅ done | `/api/analytics/trends` + `/correlations`, `/api/export/metadata`, `/analytics`, `/journal`, `/settings` export, Check-in **Sleep** / **Body**, Alembic `0003` (`weight_kg`, `body_fat_pct`) |
-| 6 — AI capture | ✅ done | `/today` home (briefing + chat), client-side OpenRouter/Ollama agent with tools, confirm cards, charts in-thread, mobile bottom tabs |
+- Log observations through manual forms without any cloud LLM or API key.
+- Encrypt diary text and goal/memory/action/feedback payloads in the browser using Web Crypto; keep numeric metrics open for server-side charts.
+- Save encrypted operations in IndexedDB, retry after connectivity returns, and track revisions, rejections, deletion tombstones and conflicts.
+- Review both sides of a conflict before choosing a version. Local state and API queries are scoped to the signed-in account.
+- Use optional OpenRouter or local Ollama integration. The model proposes cards; the application persists them only after an explicit user action.
+- Explore trends, habits, skill activity, goals and a deterministic weekly review. Download metadata or a decrypted JSON snapshot with a completeness/decryption report.
+- Switch between English and Russian UI.
 
-### Phase 2 details
+**Technical focus:** React + TypeScript + Dexie; FastAPI + async SQLAlchemy + PostgreSQL; versioned batch synchronisation, account/session guards, encrypted client persistence, controlled LLM tool access, and regression tests at unit, browser and database boundaries.
 
-- **Routing**: `react-router-dom` with protected routes. `/login` → `/today` (primary). Manual forms remain at `/checkin`.
-- **Auth**: `AuthContext` mirrors `{ token, username, salt, userId }` to `sessionStorage` and keeps the KEK strictly in memory. After a same-tab refresh the token and salt are restored, but the KEK is gone — a modal (`UnlockOverlay`) asks for the master password. A successful JWT refresh is **not** treated as a key check. Unlock unwraps a KEK verifier or an existing ciphertext; if nothing can be checked, new writes are refused.
-- **Offline queue**: Dexie IndexedDB table `entries` with `status: pending | synced | error`. Every submission is encrypted client-side, enqueued optimistically, and displayed instantly on the dashboard.
-- **SyncManager** (single global instance via `SyncContext`): pushes pending rows every 30 s, on `online`, on `visibilitychange`, and on explicit `trigger()` after a form submit. Idempotent on the server (`ON CONFLICT DO NOTHING`). Network failures are caught as `NetworkError`, marked silently as "offline", and retried on the next tick; only genuine 4xx/5xx rejections flip a row into the `error` state.
-- **Check-in forms** (Phase 2 subset): `DAILY_CHECKIN`, `THOUGHT`, `GRATITUDE`. Emotional / skill / habit arrive in Phases 3–4; sleep / body metrics in Phase 5.
-- **Dashboard**: today widgets (mood / energy / anxiety averages + entry type counts) and a 30-day line chart for mood/energy/anxiety. **All aggregation uses open numeric fields only — no content is decrypted on the dashboard.**
-- **Recent entries feed**: metadata-only (timestamp, type, open scores, tags, sync source).
+## Preview
 
-### Phase 3 details
+*Screenshot placeholder: Today view with only `[FICTIONAL DEMO]` data.*
 
-- **EMOTIONAL_STATE form** (`/checkin` → "Emotion" tab): full gap-model with per-emotion toggle — resentment (expectation / reality / trigger), guilt (my_action / perceived_expectation), shame (action / ideal_self), fear (threat / missing_solution) — plus a free-form reflection and a `cognitive_distortion` dropdown. Only the four intensity scores (0–10) leave the device as open fields; every text field is encrypted.
-- **`/psychology` page**:
-  - `GapChart` — 30-day line chart with 4 series (resentment / guilt / shame / fear) built **purely from open scores** — no decryption needed, renders even without a KEK.
-  - `PatternInsights` — per-emotion average + peak day over the last 30 days. Open-field aggregates only.
-  - `GratitudeLog` — eagerly decrypts the last 20 GRATITUDE entries client-side for a scannable list of items.
-  - `EmotionalHistory` — list of recent EMOTIONAL_STATE rows with scores visible at a glance; the encrypted gap-model breakdown is decrypted lazily **on click**, one row at a time.
-- **`useDecryptedEntries<T>(entries, kek)`** hook: batch-decrypts by id into a stable map, caches per mount so rows are never decrypted twice. Dropped on unmount — no plaintext ever reaches IndexedDB or localStorage.
-- No backend changes: the `resentment_score` / `guilt_score` / `shame_score` / `fear_score` columns were already provisioned in the Phase 1 migration.
+*Screenshot placeholder: local/server conflict comparison and a trend chart.*
 
-### Phase 4 details
+*Short video placeholder: offline save → reconnect → confirmed sync → export. No personal account or paid provider is needed.*
 
-- **Backend**: `GET/POST /api/skills`, `PUT /api/skills/{id}`; `GET/POST /api/habits`, `PUT /api/habits/{id}`. `GET /api/entries` accepts optional `habit_id` (in addition to existing `skill_id`, `entry_type`, etc.).
-- **Skill `metric_schema`**: JSON document `{ v: 1, fields: [...] }` where each field is `number` | `slider` | `text` | `select`. The **Skill** check-in tab renders `MetricFieldsForm` from this schema; values go into encrypted `custom_metrics` on `SKILL_SESSION` (see ARCHITECTURE §5). Open fields: `skill_id`, `session_duration_min`.
-- **`/skills`**: create skill (name, color, metric builder), list + select, **SkillSessionChart** (Recharts bar: sum of `session_duration_min` per local day), edit schema / deactivate, recent sessions list (metadata only).
-- **`/habits`**: create habit (name, frequency daily/weekly, optional target + unit, color), list + toggle active, **HabitHeatmap** (14 weeks, Mon–Sun, intensity = count of `HABIT_LOG` rows with `habit_completed === true` per day; future days muted).
-- **Check-in**: new **Skill** and **Habit** tabs → `SkillSessionForm` / `HabitLogForm`. `HABIT_LOG` encrypts optional `notes`; open: `habit_id`, `habit_completed`, `habit_value`.
-- **Dexie** schema bumped to **v2** — adds compound indexes `skill_id` / `habit_id` on the offline queue for faster filtered reads.
-- **`useEntries`**: server fetch uses `limit=1000` so skill/habit charts have enough history without a second round-trip.
-- **Alembic `0002`**: adds nullable `focus_score`, `social_battery_score`, `stress_score` on `entries` so daily check-in sliders can appear in the dashboard feed as **open** metrics (run `alembic upgrade head` after pull).
+These placeholders are intentional. There is no hosted public demo yet.
 
-### Phase 5 details
+## Run locally
 
-- **Backend**: `GET /api/analytics/trends` (open metric + `7d`/`30d`/`90d`/`1y`), `GET /api/analytics/correlations` (two metrics joined by UTC calendar day), `GET /api/export/metadata` (paginated rows without ciphertext). The TypeScript client forwards `tag`, `start_date`, and `end_date` on `api.listEntries` when provided.
-- **Alembic `0003`**: nullable `weight_kg`, `body_fat_pct` on `entries` for body-metric trends without decrypting encrypted JSON.
-- **Check-in**: **Sleep** tab (`SLEEP`) — `sleep_hours` / `sleep_quality` open; bedtime / wake / dream notes encrypted. **Body** tab (`BODY_METRICS`) — weight and body fat % open; waist, resting HR, notes encrypted.
-- **`/analytics`**: period chips, trend line chart (server series), scatter plot for preset cross-metric pairs.
-- **`/journal`**: client-side tag substring filter over merged entries for `THOUGHT` / `GRATITUDE` / `EMOTIONAL_STATE`; per-row decrypt preview (requires KEK).
-- **`/settings`**: download open-field metadata JSON from the API; download merged **full** JSON with plaintext decrypted in the browser (never uploaded).
+The Compose profile is for **localhost development**, with host ports bound to `127.0.0.1`. It uses PostgreSQL 16 and persistent database storage. It is not a public deployment configuration.
 
----
+Requirements: Docker Engine with Compose, or Python 3.12+, uv, Node.js 22 (22.6+ for TypeScript tests), and a separate PostgreSQL database.
 
-## Prerequisites
-
-- Docker Desktop running
-- Ports `5433` (Postgres), `8001` (LifeLog API), `5173` (frontend) free on the host
-  - `5432` is avoided (local PostgreSQL). `8000` is avoided (often another FastAPI app).
-
----
-
-## Quick start
-
-```powershell
-# 1. Copy env template
-Copy-Item .env.example .env
-
-# 2. Build and run everything
+```sh
+cp .env.example .env
+# Set JWT_SECRET to a new random value in .env before starting.
 docker compose up --build
-
-# Then open:
-#   Backend API docs : http://localhost:8001/docs
-#   Frontend         : http://localhost:5173
 ```
 
-First startup: Alembic runs `upgrade head` automatically before uvicorn boots
-(the backend container's command chains them together).
+Open [LifeLog](http://127.0.0.1:5173) and [API docs](http://127.0.0.1:8001/docs). Compose applies Alembic migrations before starting the API. The example database password is for local development; choose your own credentials for real data. Keep `.env` private.
 
-### Deployment boundary: localhost only
+**Validation limit:** Docker was unavailable during the October 2026 preparation. Host execution and all nine migrations were tested against a disposable PostgreSQL 18.6 database; container builds and a PostgreSQL 16 run still need confirmation. See [verification report](docs/portfolio-preparation-2026-10-09.md).
 
-`docker-compose.yml` is intentionally a development profile, not a production
-deployment. It runs Vite's dev server, starts uvicorn with `--reload`, installs
-npm packages at container startup, bind-mounts source code, and provides
-development defaults for PostgreSQL and `JWT_SECRET`.
+Host setup, using a new disposable database rather than an existing personal database:
 
-Do not expose this stack to the public internet or an untrusted LAN. It has no
-TLS termination, hardened static-file server, shared rate-limit store,
-token-revocation service, managed secret rotation, or production backup policy.
-Set a long random `JWT_SECRET` even on localhost. A production profile is not
-provided because LifeLog's supported deployment model is a single owner on the
-same machine; changing that boundary requires a separate security design and
-deployment review.
-
----
-
-## Phase 2 acceptance (DoD)
-
-On `http://localhost:5173`:
-
-1. On `/login` register a user (≥ 8-char password), then log in — you're redirected to `/checkin`.
-2. Fill **Daily** check-in (mood/energy/anxiety/focus/social/stress + notes) and save. A green toast confirms it's encrypted and queued.
-3. Switch to **Thought** tab, write a short thought with tags, save.
-4. Switch to **Gratitude** tab, enter three items, save.
-5. Open `/dashboard`:
-   - Today widgets show non-`—` values for mood/energy/anxiety and an entry count.
-   - The 30-day line chart renders a point for today.
-   - Recent activity feed shows all three entries with `synced` badges (after sync tick).
-6. Disconnect network → page keeps working (the top-right badge turns into `offline`, dashboard shows a soft grey info banner). Submit another entry → it appears immediately with a `pending` badge. Reconnect → within 30 s it flips to `synced`.
-7. Refresh the page (F5) while authenticated → an **unlock modal** appears over a faded dashboard. Type the master password → KEK is re-derived locally (verified against an existing entry) and the UI becomes interactive again. A wrong password is rejected with a clear error.
-
-Confirm the server still sees only ciphertext:
-
-```powershell
-docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT id, entry_type, mood_score, left(encrypted_content, 40) AS ct FROM entries ORDER BY timestamp DESC LIMIT 5;"
-```
-
-`mood_score` is a plain integer, `encrypted_content` is an opaque base64 blob. No plaintext anywhere in the DB.
-
----
-
-## Phase 3 acceptance (DoD)
-
-1. Open `/checkin` → new **Emotion** tab is present.
-2. Enable 2–3 of the four emotion cards (e.g. Resentment + Fear), set intensities, fill some text fields, pick a cognitive distortion, save. Green toast appears.
-3. Open `/psychology`:
-   - **Gap-model chart** renders lines for the emotions you just scored. Emotions you didn't enable don't appear — `connectNulls` is off, so days without data are gaps, not zeros.
-   - **Pattern insights** shows the per-emotion average and peak day for the last 30 days.
-   - **Gratitude log** decrypts recent gratitude entries client-side and lists their items.
-   - **Emotional history** shows each row with R/G/S/F score badges; clicking "show" decrypts that row only and reveals the gap-model breakdown.
-4. Verify the server still sees only scores + ciphertext for emotional entries:
-
-```powershell
-docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_type, resentment_score, guilt_score, shame_score, fear_score, left(encrypted_content, 40) AS ct FROM entries WHERE entry_type='EMOTIONAL_STATE' ORDER BY timestamp DESC LIMIT 5;"
-```
-
-Scores are plain integers, `encrypted_content` is opaque. The distortion label, expectations, reality, reflection — none of them appear anywhere in the DB.
-
----
-
-## Phase 4 acceptance (DoD)
-
-1. Open **Swagger** `http://localhost:8001/docs` — confirm `GET/POST /api/skills`, `PUT /api/skills/{id}`, `GET/POST /api/habits`, `PUT /api/habits/{id}` exist and require auth.
-2. **`/skills`**: create a skill with at least one slider metric (e.g. intensity 1–10). Open `/checkin` → **Skill**, log a session (duration + custom metric + encrypted notes). On `/skills`, select the skill — the bar chart shows minutes for days you logged; recent sessions lists open metadata only.
-3. **`/habits`**: create a daily habit. `/checkin` → **Habit** — mark completed, save. On `/habits`, select the habit — heatmap shows at least one green cell for that day. Toggle **off** on the habit → it disappears from the check-in habit list (inactive filtered out).
-4. SQL sanity — `skill_id` / `habit_id` on entries, ciphertext unchanged:
-
-```powershell
-docker exec -it lifelog_postgres psql -U lifelog -d lifelog -c "SELECT entry_type, skill_id, habit_id, habit_completed, session_duration_min, left(encrypted_content, 36) AS ct FROM entries WHERE entry_type IN ('SKILL_SESSION','HABIT_LOG') ORDER BY timestamp DESC LIMIT 8;"
-```
-
----
-
-## Phase 5 acceptance (DoD)
-
-1. **Swagger** (`/docs`): `GET /api/analytics/trends`, `GET /api/analytics/correlations`, `GET /api/export/metadata` appear and require auth.
-2. **`/checkin`**: **Sleep** and **Body** tabs save without errors; after sync, Postgres shows `sleep_hours` / `sleep_quality` and optional `weight_kg` / `body_fat_pct` as plain numbers where applicable, with ciphertext unchanged for sensitive fields.
-3. **`/analytics`**: With at least a few days of daily + sleep data, the trend chart and correlation scatter show points (or empty states without crashing).
-4. **`/journal`**: Tag filter narrows the list; **Decrypt** opens modal content when the KEK is present.
-5. **`/settings`**: Metadata download produces JSON without `encrypted_*` keys; full export includes decrypted `plaintext` objects for rows your KEK can open.
-
----
-
-## Phase 6 acceptance (DoD)
-
-1. After login, home is **Today** (`/`), not Check-in. Thin top bar + four destinations: Today, Timeline, Insights, Settings. On a ~390px viewport the four items are a **bottom tab bar**; composer sits above it.
-2. **Settings → Agent**: choose OpenRouter or Ollama, save a model id, wrap an API key with the KEK (OpenRouter). Health-check either hits OpenRouter `/models` or Ollama `/api/tags`. Privacy banner states the cloud sees the chat; LifeLog server does not.
-3. With a working provider: type *«спал 6 часов, настроение плохое, зал пропустил»* → agent shows **confirm cards** (SLEEP + DAILY_CHECKIN ± HABIT_LOG). Inferred scores are editable and not silently written. Save encrypts via the existing queue (Dexie pending → sync).
-4. Ask *«покажи настроение за 30 дней»* → a Recharts trend widget appears **in the thread** (open metrics only).
-5. Refresh → unlock overlay → Today's thread decrypts from IndexedDB. Postgres still has no chat plaintext (`encrypted_content` on entries only).
-6. `/checkin` still works as manual fallback. Insights tabs still show Dashboard / Psychology / Skills / Habits / Analytics.
-7. Keyboard on mobile: composer and mic stay visible (`visualViewport`). Tap targets on tabs / Save / mic are at least 44px.
-
-**Ollama on the Windows host (GTX 1070 8GB), not in Docker:**
-
-```powershell
-# After installing Ollama with CUDA:
-$env:OLLAMA_ORIGINS = "http://localhost:5173"
-ollama pull qwen2.5:7b
-# Use Q4; keep num_ctx at 4k–8k. Do not pull 14B onto 8GB VRAM.
-```
-
----
-
-## Project layout
-
-```
-.
-├── ARCHITECTURE.md            # Source of truth for the full design
-├── docker-compose.yml
-├── .env.example
-├── backend/
-│   ├── Dockerfile
-│   ├── pyproject.toml         # uv-managed deps
-│   ├── alembic.ini
-│   ├── alembic/
-│   │   ├── env.py
-│   │   └── versions/
-│   │       ├── 0001_initial_schema.py
-│   │       ├── 0002_daily_checkin_open_scores.py
-│   │       └── 0003_body_open_metrics.py
-│   └── app/
-│       ├── main.py
-│       ├── core/              # config, database, security (JWT, bcrypt, PBKDF2 salt)
-│       ├── models/            # SQLAlchemy (User, Skill, Habit, ContextTag, Entry)
-│       ├── schemas/           # Pydantic (auth, entry, skill, habit)
-│       ├── api/               # auth, entries, skills, habits, analytics, export, deps
-│       └── enums.py
-└── frontend/
-    ├── Dockerfile
-    ├── package.json
-    ├── vite.config.ts
-    ├── tailwind.config.js
-    └── src/
-        ├── main.tsx
-        ├── App.tsx                          # Router root + providers
-        ├── index.css
-        ├── context/
-        │   ├── AuthContext.tsx              # JWT + salt in sessionStorage; KEK memory only; unlock()
-        │   └── SyncContext.tsx              # Single global SyncManager
-        ├── db/
-        │   └── offlineQueue.ts              # Dexie schema + enqueue / markSynced / markError
-        ├── sync/
-        │   └── syncManager.ts               # Interval + online/visibility-driven push loop
-        ├── lib/
-        │   ├── crypto.ts                    # Web Crypto API: KEK / DEK / encrypt / decrypt
-        │   ├── api.ts                       # + skills / habits, analytics, export, listEntries filters
-        │   ├── metricSchema.ts              # Skill metric_schema types + parseMetricSchema
-        │   ├── dates.ts                     # Local calendar day keys
-        │   └── entrySubmit.ts               # encrypt + enqueue helper
-        ├── agent/
-        │   ├── types.ts                     # Proposed entries, chart specs, LLM settings
-        │   ├── schemas.ts                   # OpenAI tool JSON schemas
-        │   ├── providers.ts                 # OpenRouter / Ollama chat completions
-        │   ├── tools.ts                     # Client-executed tools (KEK + open APIs)
-        │   ├── runtime.ts                   # Tool-calling loop + stream
-        │   ├── commit.ts                    # propose → encryptAndEnqueue mapping
-        │   ├── snapshot.ts                  # Today gaps / open metrics for the model
-        │   ├── chatStore.ts                 # Encrypted Dexie chat turns
-        │   └── settingsStore.ts             # Provider config; API key wrapped with KEK
-        ├── pages/
-        │   ├── LoginPage.tsx
-        │   ├── TodayPage.tsx                # Phase 6 home: briefing + agent thread
-        │   ├── InsightsPage.tsx             # Tabs over dashboard / psych / skills / habits / analytics
-        │   ├── CheckinPage.tsx              # Type selector → dynamic form (fallback)
-        │   ├── DashboardPage.tsx
-        │   ├── PsychologyPage.tsx
-        │   ├── SkillsPage.tsx
-        │   ├── HabitsPage.tsx
-        │   ├── AnalyticsPage.tsx
-        │   ├── JournalPage.tsx              # Timeline
-        │   └── SettingsPage.tsx             # LLM provider + export
-        ├── hooks/
-        │   ├── useEntries.ts                # React Query + Dexie merged feed
-        │   ├── useDecryptedEntries.ts       # Batch / lazy client-side decryption cache
-        │   ├── useIsMdUp.ts
-        │   └── useKeyboardInset.ts          # visualViewport keyboard overlap
-        └── components/
-            ├── Layout.tsx                   # Mobile bottom tabs + desktop top nav
-            ├── ProtectedRoute.tsx           # Shows UnlockOverlay when KEK is missing
-            ├── UnlockOverlay.tsx            # Re-derive KEK after refresh
-            ├── ui/Slider.tsx
-            ├── today/
-            │   ├── Briefing.tsx
-            │   ├── Composer.tsx
-            │   ├── EntryCard.tsx
-            │   ├── ChartBlock.tsx
-            │   └── ToolPill.tsx
-            ├── checkin/
-            │   ├── DailyCheckinForm.tsx
-            │   ├── EmotionalStateForm.tsx   # Gap-model: 4 toggleable emotions + reflection + distortion
-            │   ├── ThoughtForm.tsx
-            │   ├── GratitudeForm.tsx
-            │   ├── SkillSessionForm.tsx       # SKILL_SESSION + dynamic metrics
-            │   ├── HabitLogForm.tsx           # HABIT_LOG
-            │   ├── SleepForm.tsx              # SLEEP
-            │   └── BodyMetricsForm.tsx        # BODY_METRICS
-            ├── dashboard/
-            │   ├── TodayWidgets.tsx
-            │   ├── MoodTrendChart.tsx       # Recharts LineChart (30 days, daily avg)
-            │   └── RecentEntries.tsx        # Metadata-only activity feed
-            ├── psychology/
-            │   ├── GapChart.tsx
-            │   ├── PatternInsights.tsx
-            │   ├── GratitudeLog.tsx
-            │   └── EmotionalHistory.tsx
-            ├── skills/
-            │   ├── MetricSchemaBuilder.tsx
-            │   ├── MetricFieldsForm.tsx
-            │   └── SkillSessionChart.tsx    # Minutes / day (open metrics)
-            └── habits/
-                └── HabitHeatmap.tsx         # Completion calendar
-```
-
----
-
-## Security invariants (enforced by code, not docs)
-
-- The server never decrypts `encrypted_content` or `encrypted_dek`.
-- Chat with OpenRouter/Ollama is sent from the browser. FastAPI never proxies or stores chat plaintext.
-- The backend logs entry `id`, `entry_type`, `timestamp` — never ciphertext or plaintext.
-- The KEK is non-extractable and lives only in React state; on refresh the user must re-enter the password.
-- DEK is generated fresh per entry (`crypto.getRandomValues` → AES-GCM 256).
-- All primary keys are UUID; all timestamps are `TIMESTAMPTZ` (UTC).
-- Schema changes go through Alembic; `create_all()` is never called.
-
----
-
-## Running outside Docker (optional)
-
-If you want the backend on the host instead of the container:
-
-```powershell
-# Postgres still in Docker (exposes 5433 on the host)
-docker compose up postgres -d
-
+```sh
 cd backend
-uv sync
-$env:DATABASE_URL = "postgresql+asyncpg://lifelog:lifelog@localhost:5433/lifelog"
+uv sync --locked
+# Set DATABASE_URL and JWT_SECRET in this shell; use a dedicated database.
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --port 8001
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-```powershell
+In a second shell:
+
+```sh
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
+
+Vite proxies `/api` to `http://localhost:8001` by default. Set `VITE_API_PROXY` for another backend address. The backend allows the default localhost frontend origins; adjust `CORS_ORIGINS` when changing ports. Web Crypto requires a secure context (localhost is supported).
+
+## Fictional demo, no API key
+
+With the local stack running, open [demo setup](http://127.0.0.1:5173/demo.html) **in a private browser window**, against a disposable database, and click **Create fictional demo**.
+
+The development-only page registers a fresh `fictional_demo_…` account, creates 14 daily check-ins, a thought, a goal update, a habit, a skill and a goal. Every seeded entry has a `fictional-demo` tag; all seeded text is labelled `[FICTIONAL DEMO]` and has `fictional_demo: true`. Encryption and synchronisation use the real application paths.
+
+Sign in with the credentials shown on the page. The demo password is public and must never protect personal information. The page refuses an active session, does not reset existing accounts, and is excluded from the production build. If setup fails, it reports partial data instead of deleting anything.
+
+Manual forms work without a model. The demo selects the **Synthetic** development provider: scripted local responses, not AI analysis, and no network requests to a model provider. OpenRouter/Ollama remain opt-in. Synthetic execution is rejected in production.
+
+Try Today, manual forms, Timeline, Overview, Analytics and Settings/export. Reloading requires the master password to unlock the key again. General journal-entry editing is currently available through the sync contract, not a complete Timeline edit UI; goals/memory/actions have their own controls.
+
+## Privacy and recovery boundaries
+
+Sensitive text uses a random AES-256-GCM data key per payload. That key is wrapped with a password-derived AES key (PBKDF2-SHA256, KDF v1: 100,000 iterations). The derived key stays in memory and is cleared on logout. Cached diary/life content and chat turns are encrypted locally.
+
+This is **hybrid client-side encryption**, not a verified end-to-end or zero-knowledge guarantee:
+
+- The login API receives the same password that derives the encryption key. A compromised auth server or delivered JavaScript could capture it. XSS, malicious extensions and a compromised browser can expose unlocked plaintext.
+- Types, timestamps, tags, numeric metrics, entity relationships, usernames, habit/skill names and other operational metadata remain readable by the server. Use neutral names/tags when appropriate.
+- A stolen database still permits offline password guessing. KDF v1 is retained for compatibility; a stronger KDF requires a key migration, not a config change.
+- Cloud AI requests disclose the current message and any explicitly permitted context in plaintext to the selected provider. Context policy and tool budgets limit access; they do not certify model privacy or resistance to every prompt injection.
+- New passwords must be 8–256 characters and at most 72 UTF-8 bytes. Legacy longer passwords retain bcrypt's first-72-byte authentication semantics; the **full original password** is still needed to derive the correct encryption key.
+- There is no forgotten-password recovery or general backup import/restore workflow. A decrypted export is readable by anyone with the file. Chat export covers this device only; inspect the export report for failures or partial sections.
+- IndexedDB is a working cache/queue, not a backup. Browser storage eviction or clearing data can lose unsynced operations. Offline editing works in an already loaded, unlocked app; first-load offline/PWA support is not implemented.
+- Login throttling is process-local; JWTs have an absolute lifetime but no server-side revocation list. This is a local, single-process MVP.
+
+Keep a private backup of the database and required configuration, and protect exported plaintext. Soft deletion coordinates clients; it does not promise physical erasure from storage or backups.
+
+## Architecture and tests
+
+[Architecture](ARCHITECTURE.md) describes current data flows and trust boundaries. [Dependency review](docs/security-dependencies.md) records remaining npm advisories and their applicability. [Verification report](docs/portfolio-preparation-2026-10-09.md) distinguishes tests actually run from checks still pending.
+
+```sh
+# backend
+uv run ruff check .
+uv run pytest
+# With a migrated DISPOSABLE DB and the API running on :8001:
+LIFELOG_LIVE_API=1 uv run pytest
+
+# frontend
+npm run build
+npx playwright install chromium
+npm test
+# With a migrated disposable DB and API running:
+VITE_API_PROXY=http://127.0.0.1:8001 npm run test:e2e
+```
+
+Run backend commands from `backend/`, frontend commands from `frontend/`. `DATABASE_URL` must point at the disposable DB for live tests. `LIFELOG_API` and `PLAYWRIGHT_API` override the test API address; `PLAYWRIGHT_BASE_URL` changes the browser test origin/port. E2E tests create fictional accounts and tombstone their entities; empty test accounts remain. Do not run them against personal data.
+
+CI defines lint/unit/build/component jobs and a PostgreSQL 16 job for migrations, live tests and browser scenarios. A green GitHub CI run has not been observed locally.
+
+## Development history and scope
+
+The owner developed the architecture iteratively with **DeepSeek, GPT and Claude**, passed proposals between models, compared their criticism, revised the design and chose how to proceed. Implementation was also AI-assisted. This repository does not represent code written entirely by hand or a course/video tutorial project.
+
+The engineering intent is to make privacy, integrity, recoverability, unreliable connectivity and user control visible in the design. Tests and documented limits are part of that work; they do not establish a production security certification.
+
+Future work includes independently reviewed security, stronger key separation/KDF migration, tested backup restoration, a complete journal editing experience, smaller frontend bundles, and richer longitudinal analysis. AGI analysis, autonomous decisions, medical interpretation and public production hosting are not delivered features.
+
+Historical planning documents are [archived](docs/archive/); their proposals are not promises about the current application.
+
+## License
+
+A redistribution license has not yet been selected by the owner. Public visibility alone should not be interpreted as a grant of reuse rights.

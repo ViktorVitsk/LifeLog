@@ -1,3 +1,5 @@
+> Historical planning archive. Proposed features and old verification labels are not the current contract. See ../README.md and ../ARCHITECTURE.md.
+
 # LifeLog implementation plan
 
 Living document. A stage is not done just because files exist — behaviour checks must pass.
@@ -26,7 +28,7 @@ Living document. A stage is not done just because files exist — behaviour chec
 ## Environment (this session)
 
 - Permission granted: Compose Postgres, Alembic on this volume, `.env` for stack config, synthetic QA users, host tests, Cursor browser on `:5173`.
-- `docker compose up --build` **failed**: Docker Desktop does not share `/media/dev/SSD/...` for bind mounts. `postgres` alone starts (named volume only).
+- `docker compose up --build` **failed**: Docker Desktop does not share `<historical-local-path>` for bind mounts. `postgres` alone starts (named volume only).
 - Host stack used instead: Postgres `:5433`, uvicorn `:8001`, Vite `:5173`. Alembic `0001`–`0008` applied on this test volume.
 - Frontend unblocked: `chown` + `npm install` wrote Linux Rollup; Vite `v5.4.21` serves `http://127.0.0.1:5173/`.
 - Bind-mount Compose for backend/frontend still blocked (Docker Desktop file sharing).

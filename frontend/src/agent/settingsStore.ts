@@ -61,6 +61,7 @@ export async function saveLlmSettings(settings: LlmSettings, kek: CryptoKey): Pr
 export async function probeLlm(settings: LlmSettings): Promise<{ ok: boolean; detail: string }> {
   try {
     if (settings.provider === "synthetic") {
+      if (import.meta.env.PROD) return { ok: false, detail: "Synthetic provider is development-only" };
       return { ok: true, detail: "Synthetic in-process completeChat" };
     }
     if (settings.provider === "ollama") {

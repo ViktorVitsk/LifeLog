@@ -30,7 +30,7 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
   const [data, setData] = useState<Record<string, T>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
-  const seenRef = useRef<Set<string>>(new Set());
+  const seenRef = useRef<Map<string, string>>(new Map());
   const { userId } = useAuth();
 
   // New KEK or account → drop cached plaintext.
@@ -41,7 +41,7 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
   }, [kek, userId]);
 
   const entrySig = entries
-    .map((e) => `${e.id}:${(e.encrypted_content ?? "").length}:${(e.encrypted_dek ?? "").length}`)
+    .map((e) => `${e.id}:${e.encrypted_content}:${e.encrypted_dek}`)
     .join("|");
 
   useEffect(() => {
@@ -50,7 +50,13 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
       return;
     }
 
-    const todo = entries.filter((e) => e.encrypted_content && !seenRef.current.has(e.id));
+    // A same-ID update can have ciphertext of exactly the same length.
+    // Cache the envelope identity, not just ID/length, and discard old plaintext.
+    const todo = entries.filter((e) => e.encrypted_content && seenRef.current.get(e.id) !== `${e.encrypted_content}:${e.encrypted_dek}`);
+    const validIds = new Set(entries.filter((e) => seenRef.current.get(e.id) === `${e.encrypted_content}:${e.encrypted_dek}`).map((e) => e.id));
+    for (const id of seenRef.current.keys()) if (!validIds.has(id)) seenRef.current.delete(id);
+    setData((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => validIds.has(id))));
+    setErrors({});
     if (todo.length === 0) {
       setPending(false);
       return;
@@ -69,7 +75,7 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
             const json = await decryptEntry(e.encrypted_content, e.encrypted_dek, kek);
             if (cancelled) return;
             newData[e.id] = JSON.parse(json) as T;
-            seenRef.current.add(e.id);
+            seenRef.current.set(e.id, `${e.encrypted_content}:${e.encrypted_dek}`);
           } catch (err) {
             if (cancelled) return;
             newErrors[e.id] = (err as Error).message;
@@ -88,7 +94,7 @@ export function useDecryptedEntries<T = Record<string, unknown>>(
     return () => {
       cancelled = true;
     };
-  }, [enabled, kek, entrySig]);
+  }, [enabled, kek, userId, entrySig]);
 
   return { data, errors, pending };
 }

@@ -110,6 +110,7 @@ export interface ProposedEntry {
   dose?: number | null;
   unit?: string;
   goal_title?: string;
+  goal_id?: string;
   progress_pct?: number | null;
   status?: string;
   statement?: string;

@@ -147,6 +147,14 @@ export async function flushOutboxUnlocked(token: string, userId: string): Promis
   let error: string | undefined;
 
   try {
+    // A goal and its progress entry may both have been created offline.
+    // Publish referenced goals first, except goals whose links need these
+    // entries to exist. Other goal/link operations retain their old ordering.
+    const entryIds = new Set(entrySnaps.map((snap) => snap.id));
+    const preGoals = lifeRows.filter((row) => row.kind === "goal"
+      && entrySnaps.some((snap) => snap.payload.goal_id === row.id)
+      && !(Array.isArray(row.payload.entry_ids) && row.payload.entry_ids.some((id) => entryIds.has(String(id)))));
+    tally.saved += await flushKind("goal", preGoals, (items) => api.syncLifeGoals(token, items as never));
     if (entrySnaps.length) {
       const resp = await api.syncEntries(
         entrySnaps.map((snap) => snap.payload),
@@ -158,7 +166,8 @@ export async function flushOutboxUnlocked(token: string, userId: string): Promis
       deleted += counts.deleted;
       error = resp.results?.find((row) => row.status === "conflict" || row.status === "rejected")?.reason ?? undefined;
     }
-    await flushLifeKindsTracked(token, lifeRows, tally);
+    const sentGoals = new Set(preGoals.map((row) => row.id));
+    await flushLifeKindsTracked(token, lifeRows.filter((row) => !sentGoals.has(row.id)), tally);
   } catch (e) {
     if (isNetworkError(e)) {
       return { attempted: claimed.length, saved: tally.saved, failed, deleted, error: "offline" };

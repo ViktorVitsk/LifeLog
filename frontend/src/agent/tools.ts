@@ -154,7 +154,7 @@ export async function executeTool(
       const rejected: { reason: string }[] = [];
       for (const item of list) {
         if (!item || typeof item !== "object") continue;
-        const p = normalizeProposal(item as Record<string, unknown>, rt.skills, rt.habits);
+        const p = normalizeProposal(item as Record<string, unknown>, rt.skills, rt.habits, rt.lifeBundle?.goals);
         if (!p) {
           rejected.push({ reason: "unknown_entry_type" });
           continue;

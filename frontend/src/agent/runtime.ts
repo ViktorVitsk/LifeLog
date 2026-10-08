@@ -282,7 +282,7 @@ export async function runAgent(args: {
   if (args.rt.proposals.size === 0 && assistantText.trim()) {
     const extra = extractFallbackProposals(assistantText);
     for (const item of extra) {
-      const p = normalizeProposal(item, args.rt.skills, args.rt.habits);
+      const p = normalizeProposal(item, args.rt.skills, args.rt.habits, args.rt.lifeBundle?.goals);
       if (p) {
         p.auto_commit = false;
         args.rt.proposals.set(p.id, p);

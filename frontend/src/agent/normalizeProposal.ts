@@ -34,6 +34,7 @@ export function normalizeProposal(
   rawIn: Record<string, unknown>,
   skills: Named[],
   habits: Named[],
+  goals: { id: string }[] = [],
 ): ProposedEntry | null {
   const raw = { ...rawIn };
   delete raw.user_confirmed;
@@ -85,11 +86,13 @@ export function normalizeProposal(
     name: str(raw.name),
     unit: str(raw.unit),
     goal_title: str(raw.goal_title),
+    goal_id: goals.find((g) => g.id === str(raw.goal_id))?.id,
     status: str(raw.status),
     statement: str(raw.statement),
     category: str(raw.category),
   };
   const issues = applyNumericFields(raw, p);
+  if (str(raw.goal_id) && !p.goal_id) issues.push({ field: "goal_id", message: "unknown_goal" });
   if (conf.issue) issues.push(conf.issue);
   p.issues = issues;
   return p;

@@ -64,4 +64,25 @@ describe("flushOutbox partial success", () => {
     assert.equal(result.attempted, 3);
     assert.equal(result.error, "memory endpoint failed");
   });
+  it("syncs a new offline goal before the entry that references it", async () => {
+    setCurrentUserId("fictional-owner");
+    setEncryptAllowed(true);
+    await enqueueLife("goal", { id: "goal-new", state: "active", encrypted_dek: "d", encrypted_content: "g" });
+    await enqueueEntry({ id: "entry-new", goal_id: "goal-new", timestamp: new Date().toISOString(), entry_type: "GOAL_UPDATE", encrypted_dek: "d", encrypted_content: "c", tags: [] });
+    const order: string[] = [];
+    mock.method(api, "syncLifeGoals", async () => {
+      order.push("goal");
+      return { saved: ["goal-new"], results: [{ id: "goal-new", status: "created", version: 1 }] };
+    });
+    mock.method(api, "syncEntries", async (rows) => {
+      assert.deepEqual(order, ["goal"]);
+      assert.equal(rows[0].goal_id, "goal-new");
+      order.push("entry");
+      return { saved: ["entry-new"], errors: [], results: [{ id: "entry-new", status: "created", version: 1 }] };
+    });
+    assert.equal((await flushOutboxUnlocked("token", "fictional-owner")).saved, 2);
+    assert.deepEqual(order, ["goal", "entry"]);
+    assert.equal((await getEntry(db, "entry-new"))?.status, "synced");
+  });
+
 });

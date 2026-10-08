@@ -5,14 +5,14 @@ import { getEntry } from "./outbox.ts";
 import { resetTestDb } from "../test/resetDb.ts";
 import { setCurrentUserId, setEncryptAllowed } from "../lib/accountScope.ts";
 
-describe("toEntryPayload goal_id omission", () => {
+describe("toEntryPayload goal link", () => {
   afterEach(async () => {
     await resetTestDb();
     setEncryptAllowed(false);
     setCurrentUserId(null);
   });
 
-  it("keeps goal_id on the stored row and omits it from the sync payload", async () => {
+  it("keeps goal_id on the stored row and sync payload", async () => {
     setCurrentUserId("user-a");
     setEncryptAllowed(true);
     await enqueueEntry({
@@ -26,8 +26,8 @@ describe("toEntryPayload goal_id omission", () => {
     });
     const stored = await getEntry(db, "e-goal");
     assert.equal(stored?.goal_id, "g1");
-    assert.equal(toEntryPayload(stored!).goal_id, undefined);
+    assert.equal(toEntryPayload(stored!).goal_id, "g1");
     const sent = await claimPendingEntries(10, "user-a");
-    assert.equal(sent[0]?.payload.goal_id, undefined);
+    assert.equal(sent[0]?.payload.goal_id, "g1");
   });
 });

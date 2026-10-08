@@ -10,6 +10,7 @@ interface Props {
   entry: ProposedEntry;
   habits: Habit[];
   skills: Skill[];
+  goals?: { id: string; name: string }[];
   busy?: boolean;
   onChange: (next: ProposedEntry) => void;
   onSave: () => void;
@@ -20,6 +21,7 @@ export default function EntryCard({
   entry,
   habits,
   skills,
+  goals = [],
   busy,
   onChange,
   onSave,
@@ -55,7 +57,7 @@ export default function EntryCard({
       </div>
 
       {(open || unmatched || blocked) && (
-        <FieldEditor entry={entry} habits={habits} skills={skills} onChange={onChange} />
+        <FieldEditor entry={entry} habits={habits} skills={skills} goals={goals} onChange={onChange} />
       )}
 
       {blocked && (
@@ -64,6 +66,7 @@ export default function EntryCard({
             <li key={`${i.field}:${i.message}`}>
               {i.field === "habit_completed" && i.message === "required"
                 ? t.habitCompletedRequired
+                : i.field === "goal_id" ? t.goalLinkRequired
                 : t.fieldOutOfRange.replace("{field}", i.field)}
             </li>
           ))}
@@ -96,11 +99,13 @@ function FieldEditor({
   entry,
   habits,
   skills,
+  goals,
   onChange,
 }: {
   entry: ProposedEntry;
   habits: Habit[];
   skills: Skill[];
+  goals: { id: string; name: string }[];
   onChange: (next: ProposedEntry) => void;
 }) {
   const { t } = useLocale();
@@ -110,6 +115,23 @@ function FieldEditor({
 
   return (
     <div className="grid gap-2">
+      {entry.entry_type === "GOAL_UPDATE" && (
+        <label className="text-xs text-zinc-400">
+          {t.goalLinkLabel}
+          <select
+            className="mt-1 w-full min-h-[44px] rounded bg-zinc-950 border border-zinc-700 px-3"
+            value={entry.goal_id ?? ""}
+            onChange={(e) => set({
+              goal_id: e.target.value || undefined,
+              goal_title: goals.find((g) => g.id === e.target.value)?.name,
+              issues: (entry.issues ?? []).filter((i) => i.field !== "goal_id"),
+            })}
+          >
+            <option value="">{t.pickExisting}</option>
+            {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </label>
+      )}
       {entry.entry_type === "HABIT_LOG" && (
         <LinkBlock
           missingLabel={t.habitMissing.replace("{name}", entry.habit_name?.trim() || "—")}

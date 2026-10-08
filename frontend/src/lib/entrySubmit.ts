@@ -67,6 +67,7 @@ export async function encryptAndEnqueue(args: {
     skill_id: openFields.skill_id ?? null,
     habit_id: openFields.habit_id ?? null,
     context_id: openFields.context_id ?? null,
+    goal_id: openFields.goal_id ?? null,
     encrypted_content: encryptedContent,
     encrypted_dek: encryptedDek,
     recorded_at: new Date().toISOString(),

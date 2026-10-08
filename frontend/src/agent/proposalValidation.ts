@@ -115,6 +115,9 @@ export function collectNumericIssues(p: ProposedEntry): FieldIssue[] {
 /** Block Save when present values are invalid or a habit log has no yes/no. */
 export function validateProposalForSave(p: ProposedEntry): FieldIssue[] {
   const issues = [...(p.issues ?? []), ...collectNumericIssues(p)];
+  if (p.entry_type === "GOAL_UPDATE" && !p.goal_id) {
+    issues.push({ field: "goal_id", message: "required" });
+  }
   if (p.entry_type === "HABIT_LOG" && p.habit_completed == null) {
     issues.push({ field: "habit_completed", message: "required" });
   }

@@ -77,6 +77,7 @@ const proposedEntryProperties: Record<string, unknown> = {
   dose: { type: ["number", "null"] },
   unit: { type: "string" },
   goal_title: { type: "string" },
+  goal_id: { type: "string", description: "For GOAL_UPDATE, use an existing goal id from the allowed context. Never invent a goal id." },
   progress_pct: { type: ["number", "null"] },
   status: { type: "string" },
   statement: { type: "string" },

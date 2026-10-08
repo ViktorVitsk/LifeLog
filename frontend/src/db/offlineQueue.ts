@@ -326,7 +326,7 @@ function dummyPayload(id: string, deleted = false): EntrySyncPayload {
   return { id, timestamp: "", entry_type: "THOUGHT", encrypted_dek: "", encrypted_content: "", tags: [], deleted };
 }
 
-/** Intentionally omits `goal_id`. Characterization coverage lives in `toEntryPayload.test.ts`. */
+/** Preserve the same open references in storage and on the wire. */
 export function toEntryPayload(row: PendingEntry): EntrySyncPayload {
   return {
     id: row.id,
@@ -335,6 +335,7 @@ export function toEntryPayload(row: PendingEntry): EntrySyncPayload {
     skill_id: row.skill_id,
     habit_id: row.habit_id,
     context_id: row.context_id,
+    goal_id: row.goal_id,
     tags: row.tags ?? [],
     mood_score: row.mood_score,
     energy_score: row.energy_score,

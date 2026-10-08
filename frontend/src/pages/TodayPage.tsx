@@ -312,6 +312,10 @@ export default function TodayPage() {
     try {
       const host = threadRef.current.find((m) => m.id === msgId);
       const current = host?.proposals?.find((x) => x.id === p.id) ?? p;
+      if (current.entry_type === "GOAL_UPDATE" && !life.bundle.goals.some((g) => g.id === current.goal_id)) {
+        setErr(t.goalLinkRequired);
+        return;
+      }
       const issues = validateProposalForSave(current);
       if (issues.length) {
         setErr(t.cardFixFields);
@@ -526,6 +530,7 @@ export default function TodayPage() {
                 entry={p}
                 habits={habits}
                 skills={skills}
+                goals={life.bundle.goals.map((g) => ({ id: g.id, name: String(goalPlain[g.id]?.title ?? t.goalLinkLabel) }))}
                 onChange={(next) => patchProposal(m.id, next)}
                 onSave={() => void saveProposal(m.id, p)}
                 onDismiss={() => void dismissProposal(m.id, p.id)}

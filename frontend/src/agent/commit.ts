@@ -1,11 +1,11 @@
-import { encryptAndEnqueue } from "../lib/entrySubmit";
-import { localDayKey, sleepEventTimestamp } from "../lib/dates";
-import type { AppCommitMeta } from "./confirmation";
-import { requireAppConfirmation } from "./confirmation";
+import { encryptAndEnqueue } from "../lib/entrySubmit.ts";
+import { localDayKey, sleepEventTimestamp } from "../lib/dates.ts";
+import type { AppCommitMeta } from "./confirmation.ts";
+import { requireAppConfirmation } from "./confirmation.ts";
 import type { AppLocale } from "../i18n/locale";
-import { STRINGS } from "../i18n/strings";
-import { validateProposalForSave } from "./proposalValidation";
-import { normalizeProposal } from "./normalizeProposal";
+import { STRINGS } from "../i18n/strings.ts";
+import { validateProposalForSave } from "./proposalValidation.ts";
+import { normalizeProposal } from "./normalizeProposal.ts";
 import type { ProposedEntry } from "./types";
 
 export { normalizeProposal };
@@ -216,7 +216,7 @@ export async function commitProposedEntry(
           reflection: p.reflection ?? p.notes,
           ...prov,
         },
-        openFields: { tags: extraTags.concat(["goal"]) },
+        openFields: { goal_id: p.goal_id, tags: extraTags.concat(["goal"]) },
       }).then((r) => ({ ...r, confirmation_event_id: meta.confirmation_event_id }));
     case "BELIEF":
       return encryptAndEnqueue({

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -60,7 +62,12 @@ def test_live_timezone_and_local_calendar_day():
         assert back.json()["timezone"] == "Europe/Moscow"
 
         entry_id = str(uuid.uuid4())
-        # 22:00 UTC 18 Sep = 01:00 Moscow 19 Sep
+        # Use a recent local day so this remains inside the rolling 7d window.
+        # 01:00 local belongs to a different date from its UTC instant.
+        local_event = (datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=1)).replace(
+            hour=1, minute=0, second=0, microsecond=0
+        )
+        utc_event = local_event.astimezone(UTC)
         first = client.post(
             f"{BASE}/api/entries/sync",
             headers=headers,
@@ -68,7 +75,7 @@ def test_live_timezone_and_local_calendar_day():
                 "entries": [
                     {
                         "id": entry_id,
-                        "timestamp": "2026-09-18T22:00:00+00:00",
+                        "timestamp": utc_event.isoformat(),
                         "entry_type": "THOUGHT",
                         "tags": [],
                         "mood_score": 6,
@@ -97,6 +104,5 @@ def test_live_timezone_and_local_calendar_day():
         body = trends.json()
         points = body["points"] if isinstance(body, dict) else body
         by_day = {point["day"]: point["value"] for point in points}
-        assert "2026-09-19" in by_day
-        assert by_day["2026-09-19"] == 6
-        assert "2026-09-18" not in by_day
+        assert by_day[local_event.date().isoformat()] == 6
+        assert utc_event.date().isoformat() not in by_day

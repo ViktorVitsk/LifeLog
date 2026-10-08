@@ -1,12 +1,19 @@
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     timezone: str | None = Field(default=None, max_length=64)
+
+    @field_validator("password")
+    @classmethod
+    def password_fits_bcrypt(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("password_too_long_utf8")
+        return value
 
 
 class RegisterResponse(BaseModel):
@@ -19,8 +26,9 @@ class RegisterResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64)
+    # Historical registration allowed up to 256 Unicode characters.
+    password: str = Field(min_length=1, max_length=256)
 
 
 class LoginResponse(BaseModel):

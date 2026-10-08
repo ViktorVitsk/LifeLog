@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
+from math import isfinite
 from typing import Any
 from uuid import UUID
 
@@ -44,6 +45,7 @@ INT_1_10 = frozenset(
     }
 )
 
+
 def _as_uuid(value: Any) -> UUID | None:
     if value is None:
         return None
@@ -80,6 +82,7 @@ def entry_fingerprint(data: Mapping[str, Any]) -> tuple[Any, ...]:
         str(data["skill_id"]) if data.get("skill_id") is not None else None,
         str(data["habit_id"]) if data.get("habit_id") is not None else None,
         str(data["context_id"]) if data.get("context_id") is not None else None,
+        str(data["goal_id"]) if data.get("goal_id") is not None else None,
         _tags_key(data.get("tags")),
         data.get("mood_score"),
         data.get("energy_score"),
@@ -106,7 +109,12 @@ def entry_fingerprint(data: Mapping[str, Any]) -> tuple[Any, ...]:
 def validate_incoming(data: Mapping[str, Any]) -> str | None:
     dek = data.get("encrypted_dek")
     content = data.get("encrypted_content")
-    if not isinstance(dek, str) or not dek.strip() or not isinstance(content, str) or not content.strip():
+    if (
+        not isinstance(dek, str)
+        or not dek.strip()
+        or not isinstance(content, str)
+        or not content.strip()
+    ):
         return "missing_ciphertext"
 
     ts = data.get("timestamp")
@@ -142,22 +150,45 @@ def validate_incoming(data: Mapping[str, Any]) -> str | None:
 
     sleep_hours = data.get("sleep_hours")
     if sleep_hours is not None:
-        if isinstance(sleep_hours, bool) or not isinstance(sleep_hours, (int, float)) or sleep_hours < 0 or sleep_hours > 24:
+        if (
+            isinstance(sleep_hours, bool)
+            or not isinstance(sleep_hours, (int, float))
+            or not isfinite(sleep_hours)
+            or sleep_hours < 0
+            or sleep_hours > 24
+        ):
             return "out_of_range"
 
     weight_kg = data.get("weight_kg")
     if weight_kg is not None:
-        if isinstance(weight_kg, bool) or not isinstance(weight_kg, (int, float)) or weight_kg < 0 or weight_kg > 500:
+        if (
+            isinstance(weight_kg, bool)
+            or not isinstance(weight_kg, (int, float))
+            or not isfinite(weight_kg)
+            or weight_kg < 0
+            or weight_kg > 500
+        ):
             return "out_of_range"
 
     body_fat = data.get("body_fat_pct")
     if body_fat is not None:
-        if isinstance(body_fat, bool) or not isinstance(body_fat, (int, float)) or body_fat < 0 or body_fat > 100:
+        if (
+            isinstance(body_fat, bool)
+            or not isinstance(body_fat, (int, float))
+            or not isfinite(body_fat)
+            or body_fat < 0
+            or body_fat > 100
+        ):
             return "out_of_range"
 
     duration = data.get("session_duration_min")
     if duration is not None:
-        if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
+        if (
+            isinstance(duration, bool)
+            or not isinstance(duration, int)
+            or duration < 0
+            or duration > 24 * 60
+        ):
             return "out_of_range"
 
     habit_completed = data.get("habit_completed")
@@ -165,7 +196,11 @@ def validate_incoming(data: Mapping[str, Any]) -> str | None:
         return "invalid_habit_completed"
 
     habit_value = data.get("habit_value")
-    if habit_value is not None and (isinstance(habit_value, bool) or not isinstance(habit_value, (int, float))):
+    if habit_value is not None and (
+        isinstance(habit_value, bool)
+        or not isinstance(habit_value, (int, float))
+        or not isfinite(habit_value)
+    ):
         return "out_of_range"
 
     return None
@@ -257,6 +292,8 @@ def decide_sync_item(
         if incoming_deleted:
             if _is_deleted(existing):
                 return SyncStatus.DELETED, None
+            if incoming.get("version") is None:
+                return SyncStatus.CONFLICT, "version_required"
             if versions_conflict(incoming, existing):
                 return SyncStatus.CONFLICT, "version_mismatch"
             return SyncStatus.DELETED, None
@@ -268,6 +305,15 @@ def decide_sync_item(
             return SyncStatus.CONFLICT, "version_required"
         if versions_conflict(incoming, existing):
             return SyncStatus.CONFLICT, "version_mismatch"
+        reason = validate_incoming(incoming) or validate_refs(
+            incoming,
+            owned_skill_ids=owned_skill_ids,
+            owned_habit_ids=owned_habit_ids,
+            owned_context_ids=owned_context_ids,
+            owned_goal_ids=owned_goal_ids,
+        )
+        if reason:
+            return SyncStatus.REJECTED, reason
         return SyncStatus.UPDATED, None
 
     if incoming_deleted:

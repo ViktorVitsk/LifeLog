@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
+
 from app.services.sync_contract import decide_sync_item, entry_fingerprint, validate_incoming
 
 USER = uuid4()
@@ -264,4 +266,65 @@ def test_upsert_of_soft_deleted_row_is_rejected():
 def test_fingerprint_treats_equivalent_timezones_as_same():
     utc = datetime(2026, 9, 19, 10, 0, tzinfo=UTC)
     offset = datetime(2026, 9, 19, 13, 0, tzinfo=timezone(timedelta(hours=3)))
-    assert entry_fingerprint(_incoming(timestamp=utc)) == entry_fingerprint(_incoming(timestamp=offset))
+    assert entry_fingerprint(_incoming(timestamp=utc)) == entry_fingerprint(
+        _incoming(timestamp=offset)
+    )
+
+
+@pytest.mark.parametrize(
+    "patch,reason",
+    [
+        ({"skill_id": SKILL}, "unknown_skill"),
+        ({"habit_id": HABIT}, "unknown_habit"),
+        ({"context_id": OTHER}, "unknown_context"),
+        ({"goal_id": OTHER}, "unknown_goal"),
+        ({"mood_score": 99}, "out_of_range"),
+        ({"session_duration_min": 1441}, "out_of_range"),
+        ({"sleep_hours": float("nan")}, "out_of_range"),
+        ({"habit_value": float("inf")}, "out_of_range"),
+        ({"timestamp": NOW.replace(tzinfo=None)}, "naive_timestamp"),
+        ({"encrypted_content": ""}, "missing_ciphertext"),
+        ({"entry_type": "invented"}, "invalid_entry_type"),
+    ],
+)
+def test_update_validates_content_and_account_owned_references(patch, reason):
+    existing = {**_incoming(), "user_id": USER, "version": 1}
+    incoming = {**existing, "encrypted_content": "changed", **patch}
+    assert decide_sync_item(
+        incoming,
+        user_id=USER,
+        existing=existing,
+        owned_skill_ids=set(),
+        owned_habit_ids=set(),
+        owned_context_ids=set(),
+        owned_goal_ids=set(),
+    ) == ("rejected", reason)
+
+
+def test_goal_only_change_is_an_update_and_idempotent_retry_is_duplicate():
+    existing = {**_incoming(), "user_id": USER, "version": 1, "goal_id": None}
+    incoming = {**existing, "goal_id": OTHER}
+    args = dict(
+        user_id=USER,
+        owned_skill_ids=set(),
+        owned_habit_ids=set(),
+        owned_context_ids=set(),
+        owned_goal_ids={OTHER},
+    )
+    assert decide_sync_item(incoming, existing=existing, **args) == ("updated", None)
+    assert decide_sync_item(incoming, existing={**incoming, "version": 2}, **args) == (
+        "duplicate",
+        None,
+    )
+
+
+def test_delete_of_live_entry_requires_version():
+    existing = {**_incoming(), "user_id": USER, "version": 1}
+    assert decide_sync_item(
+        {**existing, "version": None, "deleted": True},
+        user_id=USER,
+        existing=existing,
+        owned_skill_ids=set(),
+        owned_habit_ids=set(),
+        owned_context_ids=set(),
+    ) == ("conflict", "version_required")

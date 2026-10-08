@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { useLocale } from "../context/LocaleContext";
 import { api } from "../lib/api";
 import { browserTimeZone } from "../lib/dates";
+import { registrationPasswordTooLong } from "../lib/passwordValidation";
 
 type Mode = "login" | "register";
 
@@ -23,6 +24,10 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (mode === "register" && registrationPasswordTooLong(password)) {
+      setError(t.passwordTooLong);
+      return;
+    }
     setBusy(true);
     try {
       if (mode === "register") {
@@ -79,6 +84,7 @@ export default function LoginPage() {
 
         <div className="space-y-2">
           <input
+            aria-label={t.username}
             className="w-full min-h-[44px] rounded bg-zinc-900 border border-zinc-700 px-3"
             placeholder={t.username}
             autoComplete="username"
@@ -86,6 +92,7 @@ export default function LoginPage() {
             onChange={(e) => setUsername(e.target.value)}
           />
           <input
+            aria-label={t.masterPassword}
             className="w-full min-h-[44px] rounded bg-zinc-900 border border-zinc-700 px-3"
             type="password"
             placeholder={t.masterPassword}

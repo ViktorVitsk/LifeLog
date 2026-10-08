@@ -12,12 +12,18 @@ settings = get_settings()
 
 def hash_password(password: str) -> str:
     """bcrypt password hash. Used for login verification only."""
+    encoded = password.encode("utf-8")
+    if len(encoded) > 72:
+        raise ValueError("password_too_long_utf8")
     salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+    return bcrypt.hashpw(encoded, salt).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    # bcrypt < 5 silently used the first 72 bytes. Preserve authentication
+    # for those existing accounts, while registration rejects new long inputs.
+    # The browser must still derive its KEK from the FULL original password.
+    return bcrypt.checkpw(password.encode("utf-8")[:72], password_hash.encode("utf-8"))
 
 
 def generate_pbkdf2_salt() -> str:

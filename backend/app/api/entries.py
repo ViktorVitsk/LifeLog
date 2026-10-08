@@ -126,7 +126,9 @@ async def sync_entries(
     except ValueError:
         account_tz = DEFAULT_TIMEZONE
     incoming_ids = [item.id for item in payload.entries]
-    existing_rows = (await db.execute(_existing_entries_query(incoming_ids, user_id))).scalars().all()
+    existing_rows = (
+        (await db.execute(_existing_entries_query(incoming_ids, user_id))).scalars().all()
+    )
     existing_by_id = {row.id: _entry_as_dict(row) for row in existing_rows}
 
     owned_skills = set(
@@ -136,12 +138,18 @@ async def sync_entries(
         (await db.execute(select(Habit.id).where(Habit.user_id == user_id))).scalars().all()
     )
     owned_contexts = set(
-        (await db.execute(select(ContextTag.id).where(ContextTag.user_id == user_id))).scalars().all()
+        (await db.execute(select(ContextTag.id).where(ContextTag.user_id == user_id)))
+        .scalars()
+        .all()
     )
     owned_goals = set(
         (
-            await db.execute(select(Goal.id).where(Goal.user_id == user_id, Goal.deleted_at.is_(None)))
-        ).scalars().all()
+            await db.execute(
+                select(Goal.id).where(Goal.user_id == user_id, Goal.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
     )
 
     results: list[SyncItemResult] = []
@@ -158,48 +166,78 @@ async def sync_entries(
             owned_context_ids=owned_contexts,
             owned_goal_ids=owned_goals,
         )
-        if status_name == "deleted":
+        if status_name in {"updated", "deleted"}:
             stored = existing_by_id.get(item.id)
-            if stored and stored.get("deleted_at") is None and stored.get("user_id") == user_id:
-                live = (
-                    await db.execute(select(Entry).where(Entry.id == item.id, Entry.user_id == user_id))
-                ).scalar_one_or_none()
-                if live is not None and live.deleted_at is None:
-                    live.deleted_at = datetime.now(UTC)
-                    live.version = (live.version or 1) + 1
-                    await db.flush()
-                    existing_by_id[item.id] = _entry_as_dict(live)
-            results.append(SyncItemResult(id=item.id, status="deleted"))
-            deleted += 1
-            continue
+            if status_name == "deleted" and (not stored or stored.get("deleted_at") is not None):
+                results.append(
+                    SyncItemResult(
+                        id=item.id,
+                        status="deleted",
+                        version=stored.get("version") if stored else None,
+                    )
+                )
+                deleted += 1
+                continue
 
-        if status_name == "updated":
-            live = (
-                await db.execute(select(Entry).where(Entry.id == item.id, Entry.user_id == user_id))
-            ).scalar_one_or_none()
-            expected = (live.version if live is not None else 1) or 1
-            values = {
-                k: v
-                for k, v in _row_values(item, user_id, account_tz).items()
-                if k not in {"id", "user_id", "version"}
-            }
+            # Use the version supplied by the caller, never a newer value read
+            # after deciding the operation. Both update and delete are CAS writes.
+            expected = item.version
+            values = (
+                {"deleted_at": datetime.now(UTC)}
+                if status_name == "deleted"
+                else {
+                    k: v
+                    for k, v in _row_values(item, user_id, account_tz).items()
+                    if k not in {"id", "user_id", "version"}
+                }
+            )
             stmt = (
                 update(Entry)
-                .where(Entry.id == item.id, Entry.user_id == user_id, Entry.version == expected)
+                .where(
+                    Entry.id == item.id,
+                    Entry.user_id == user_id,
+                    Entry.version == expected,
+                    Entry.deleted_at.is_(None),
+                )
                 .values(**values, version=expected + 1)
+                .execution_options(synchronize_session=False)
             )
-            cas = await db.execute(stmt)
+            try:
+                # A database constraint failure affects this item only, just as
+                # it does for inserts. Do not poison the outer batch transaction.
+                async with db.begin_nested():
+                    cas = await db.execute(stmt)
+            except IntegrityError:
+                results.append(
+                    SyncItemResult(id=item.id, status="rejected", reason="persist_failed")
+                )
+                rejected += 1
+                continue
             if (cas.rowcount or 0) != 1:
-                results.append(SyncItemResult(id=item.id, status="conflict", reason="version_mismatch"))
+                results.append(
+                    SyncItemResult(id=item.id, status="conflict", reason="version_mismatch")
+                )
                 conflict += 1
                 continue
-            results.append(SyncItemResult(id=item.id, status="updated", version=expected + 1))
-            existing_by_id[item.id] = {**incoming, "user_id": user_id, "version": expected + 1, "deleted_at": None}
-            updated += 1
+            existing_by_id[item.id] = {**stored, **values, "version": expected + 1}
+            results.append(SyncItemResult(id=item.id, status=status_name, version=expected + 1))
+            if status_name == "deleted":
+                deleted += 1
+            else:
+                updated += 1
             continue
 
         if status_name != "created":
-            results.append(SyncItemResult(id=item.id, status=status_name, reason=reason))
+            results.append(
+                SyncItemResult(
+                    id=item.id,
+                    status=status_name,
+                    reason=reason,
+                    version=existing_by_id.get(item.id, {}).get("version")
+                    if status_name == "duplicate"
+                    else None,
+                )
+            )
             if status_name == "duplicate":
                 duplicate += 1
             elif status_name == "conflict":
@@ -212,8 +250,13 @@ async def sync_entries(
             async with db.begin_nested():
                 db.add(Entry(**_row_values(item, user_id, account_tz)))
                 await db.flush()
-            results.append(SyncItemResult(id=item.id, status="created"))
-            existing_by_id[item.id] = {**incoming, "user_id": user_id, "version": 1, "deleted_at": None}
+            results.append(SyncItemResult(id=item.id, status="created", version=1))
+            existing_by_id[item.id] = {
+                **incoming,
+                "user_id": user_id,
+                "version": 1,
+                "deleted_at": None,
+            }
             created += 1
         except IntegrityError:
             again = (
@@ -234,9 +277,20 @@ async def sync_entries(
                 owned_context_ids=owned_contexts,
                 owned_goal_ids=owned_goals,
             )
-            if status_name == "created":
+            # An insert race never executed an UPDATE. Do not acknowledge a
+            # changed payload as saved just because it would now be updateable.
+            if status_name == "updated":
+                status_name, reason = "conflict", "id_exists"
+            elif status_name == "created":
                 status_name, reason = "rejected", "persist_failed"
-            results.append(SyncItemResult(id=item.id, status=status_name, reason=reason))
+            results.append(
+                SyncItemResult(
+                    id=item.id,
+                    status=status_name,
+                    reason=reason,
+                    version=again.version if status_name == "duplicate" else None,
+                )
+            )
             if status_name == "duplicate":
                 duplicate += 1
             elif status_name == "conflict":

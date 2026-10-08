@@ -3,17 +3,18 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    UV_SYSTEM_PYTHON=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
 # Install uv (fast Python package manager)
-RUN pip install --no-cache-dir uv==0.5.4
+RUN pip install --no-cache-dir uv==0.12.24
 
 # Install dependencies first (better caching)
-COPY pyproject.toml ./
-RUN uv pip install --system -r pyproject.toml
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
 
 # Copy the rest of the source code
 COPY . .

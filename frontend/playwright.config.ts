@@ -1,18 +1,6 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-function hasChromium(root: string): boolean {
-  return (
-    existsSync(join(root, "chromium-1243", "chrome-linux64", "chrome")) ||
-    existsSync(join(root, "chromium_headless_shell-1243", "chrome-headless-shell-linux64", "chrome-headless-shell"))
-  );
-}
-
-const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
-if (browsersPath && !hasChromium(browsersPath)) {
-  delete process.env.PLAYWRIGHT_BROWSERS_PATH;
-}
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -23,13 +11,13 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5173",
+    baseURL,
     ...devices["Desktop Chrome"],
     viewport: { width: 1280, height: 900 },
   },
   webServer: {
-    command: "npm run dev",
-    url: "http://127.0.0.1:5173",
+    command: `npm run dev -- --host 127.0.0.1 --port ${new URL(baseURL).port || "5173"}`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },

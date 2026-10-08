@@ -19,7 +19,6 @@ env/
 dist/
 build/
 .uv/
-uv.lock
 
 # Node / Vite
 node_modules/
